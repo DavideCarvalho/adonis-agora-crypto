@@ -1,0 +1,85 @@
+---
+title: KMS
+description: Use the crypto server as the root of another Agora lib's envelope encryption, and as a remote signer.
+icon: ShieldCheck
+---
+
+The Agora crypto kit (copied into every lib) can run in envelope mode: each sealed value carries a
+data key wrapped by a `KmsAdapter`. Point that adapter at this server and no lib holds key material
+any more — the server is the root.
+
+```ts
+import { cryptoServerKms, createCryptoClient } from '@adonis-agora/crypto-client'
+import { createKeyring } from './crypto-kit/index.js'
+
+const client = createCryptoClient({
+  url: env.get('CRYPTO_URL'),          // https://crypto.example.com/_crypto
+  partition: 'streaming',
+  token: authkitTenantToken({ issuer, clientId, clientSecret, resource: 'urn:agora:crypto' }),
+})
+
+const keyring = createKeyring({
+  purpose: 'config:secrets',
+  encryption: appEncryption,           // the lib's local layer stays as it is
+  kms: cryptoServerKms({ client, key: 'fleet-root' }),
+})
+```
+
+The server needs one `aes256-gcm` key for the fleet (`fleet-root` above) and the app's token needs
+`crypto:encrypt:fleet-root` and `crypto:decrypt:fleet-root`.
+
+## What the adapter does
+
+- `wrap(dataKey, { purpose })` encrypts the 32-byte data key with the named key, binding the
+  keyring's `purpose` as AAD.
+- `unwrap(wrapped, { purpose })` decrypts it. A data key wrapped for `config:secrets` cannot be
+  unwrapped for another purpose, so a value cannot be moved between libs.
+
+Rotating the fleet root is one command, and old wrapped keys keep working because each ciphertext
+names the version that sealed it:
+
+```sh
+node ace crypto:keys:rotate fleet-root
+```
+
+## Who can use it
+
+Any lib that copies the crypto kit accepts an adapter with exactly this shape:
+
+```ts
+@adonis-agora/config      crypto: { kms: cryptoServerKms({ client, key: 'fleet-root' }) }
+authkit-server            keystore / account secrets
+@adonis-agora/agent       poppy connections
+```
+
+The kit's `KmsAdapter` is `{ wrap, unwrap }` returning `Uint8Array`; `cryptoServerKms` implements it
+structurally, so the client package never imports `@adonisjs/core`.
+
+## Remote signer
+
+When a signature has to come from a key the app must not hold (a webhook signing key, a licence
+token), use the remote signer:
+
+```ts
+import { cryptoServerSigner } from '@adonis-agora/crypto-client'
+
+const signer = cryptoServerSigner({ client, key: 'webhooks' })
+const signature = await signer.sign(body)          // agora:sig1:<kid>:<signature>
+await signer.verify(body, signature)
+const jwk = await signer.publicKey()
+```
+
+The signature format is the crypto kit's, so a receiver verifies it with the kit's `verify()` and the
+published JWK — no shared secret, and the private key never leaves the server.
+
+## Choosing a root
+
+| Root | When |
+| --- | --- |
+| the app's `encryption` service | default; one key for the app, rotation in `config/encryption.ts` |
+| `crypto.keys` | this package owns the root; rotate by prepending a key |
+| a cloud KMS via `KmsAdapter` | the root must live in AWS/GCP/Azure; key material is wrapped by the KMS |
+| **this server** | several apps must share a root, and none of them should hold it |
+
+The two compose: a crypto server can itself use a cloud `KmsAdapter` as its root, so the fleet's
+material is protected by the cloud KMS while apps only ever talk to the crypto server.

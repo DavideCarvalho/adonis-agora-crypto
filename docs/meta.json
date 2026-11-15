@@ -1,4 +1,4 @@
 {
   "title": "Crypto",
-  "pages": ["index", "getting-started", "operations"]
+  "pages": ["index", "getting-started", "keys", "operations", "authentication", "deployment", "kms"]
 }
