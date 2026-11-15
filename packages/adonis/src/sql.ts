@@ -19,21 +19,21 @@ export function dialectOf(client: SqlClient): Dialect {
   if (/postgres|pg|redshift/i.test(name)) return 'postgres';
   if (/mysql|mariadb/i.test(name)) return 'mysql';
   if (/sqlite/i.test(name)) return 'sqlite';
-  throw new Error(`@adonis-agora/config: unsupported database dialect "${name}"`);
+  throw new Error(`@adonis-agora/crypto: unsupported database dialect "${name}"`);
 }
 
-/** Every table this package owns. */
-export const CONFIG_TABLES = ['config_versions', 'config_audit'] as const;
+/** Every table this package owns. The schema rewriting below knows exactly these (and nothing else). */
+export const CRYPTO_TABLES = ['crypto_keys', 'crypto_key_versions', 'crypto_audit'] as const;
 
 const SCHEMA_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,62}$/;
-const TABLE_REF = new RegExp(`(?<![\\w.'"\`])(${CONFIG_TABLES.join('|')})(?![\\w'"\`])`, 'g');
+const TABLE_REF = new RegExp(`(?<![\\w.'"\`])(${CRYPTO_TABLES.join('|')})(?![\\w'"\`])`, 'g');
 const IN_SCHEMA = Symbol.for('adonis-agora.config.schema');
 
 /** Checks a schema name from the config: a plain identifier, since it is written into SQL. */
 export function assertSchemaName(schema: string): void {
   if (!SCHEMA_NAME.test(schema)) {
     throw new Error(
-      `@adonis-agora/config: invalid schema "${schema}" (letters, digits and _, not starting with a digit)`,
+      `@adonis-agora/crypto: invalid schema "${schema}" (letters, digits and _, not starting with a digit)`,
     );
   }
 }
@@ -59,7 +59,7 @@ export function inSchema<T extends SqlClient>(client: T, schema: string | undefi
   assertSchemaName(schema);
   const dialect = dialectOf(client);
   if (dialect === 'sqlite') {
-    throw new Error('@adonis-agora/config: `schema` needs Postgres or MySQL, not SQLite');
+    throw new Error('@adonis-agora/crypto: `schema` needs Postgres or MySQL, not SQLite');
   }
   return new Proxy(client, {
     get(target, property) {

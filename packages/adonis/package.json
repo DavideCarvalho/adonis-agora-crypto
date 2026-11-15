@@ -1,7 +1,7 @@
 {
   "name": "@adonis-agora/crypto",
   "version": "0.9.1",
-  "description": "A crypto server and in-process service for AdonisJS: named, versioned keys per app, encrypt/decrypt/rewrap/sign/hmac, data keys, audited over HTTP or in process \u2014 a small HashiCorp Vault Transit. Part of the Agora ecosystem.",
+  "description": "A crypto server and in-process service for AdonisJS: named, versioned keys per app, encrypt/decrypt/rewrap/sign/hmac, data keys, audited over HTTP or in process — a small HashiCorp Vault Transit. Part of the Agora ecosystem.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -103,9 +103,11 @@
     "@adonisjs/lucid": "22.4.2",
     "@types/luxon": "3.7.6",
     "@types/node": "26.6.6",
+    "@types/pg": "8.15.5",
     "better-sqlite3": "13.0.3",
     "jose": "6.2.15",
     "luxon": "3.7.2",
+    "pg": "8.16.3",
     "typescript": "7.0.2",
     "vitest": "5.1.0"
   },

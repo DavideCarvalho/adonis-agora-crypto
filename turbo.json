@@ -1,5 +1,6 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "globalPassThroughEnv": ["CRYPTO_TEST_PG_URL"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
