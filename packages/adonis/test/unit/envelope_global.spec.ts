@@ -331,6 +331,39 @@ describe('envelope interceptor — target identification', () => {
     expect(state.errors[0]!.message).toMatch(/crypto server is down/);
   });
 
+  it('refuses to install when fetch does not run the interceptor', async () => {
+    // A dispatcher that composes nothing: the probe never reaches the interceptor, and booting with
+    // configured targets would send plaintext, so installation fails.
+    const inert = {
+      dispatch(
+        _options: unknown,
+        handler: {
+          onResponseError?: (c: unknown, e: Error) => void;
+          onError?: (e: Error) => void;
+        },
+      ) {
+        const error = new Error('inert dispatcher');
+        if (typeof handler.onResponseError === 'function') handler.onResponseError(null, error);
+        else handler.onError?.(error);
+        return true;
+      },
+      compose() {
+        return inert;
+      },
+    };
+    globals[V1] = inert as never;
+    globals[V2] = inert as never;
+
+    await expect(
+      installCryptoEnvelope({
+        config: { key: 'svc-hub' },
+        outboundCipher: base64Cipher,
+        inboundCipher: base64Cipher,
+        skipPaths: ['/_crypto'],
+      }),
+    ).rejects.toThrow(/not in the global fetch dispatcher/);
+  });
+
   it('refuses to install outbound sealing without a key', async () => {
     await expect(
       installCryptoEnvelope({
