@@ -61,10 +61,16 @@ export default class CryptoEnvelopeInboundMiddleware {
       return refuse(ctx, 400, 'invalid', GENERIC);
     }
 
-    const read = await readEnvelopeBody(
-      ctx as unknown as Parameters<typeof readEnvelopeBody>[0],
-      inbound.maxBytes,
-    );
+    let read: Awaited<ReturnType<typeof readEnvelopeBody>>;
+    try {
+      read = await readEnvelopeBody(
+        ctx as unknown as Parameters<typeof readEnvelopeBody>[0],
+        inbound.maxBytes,
+      );
+    } catch (error) {
+      inbound.warn?.(`[@adonis-agora/crypto] envelope refused: ${String(error)}`);
+      return refuse(ctx, 400, 'malformed', GENERIC);
+    }
     if (read.tooLarge) return refuse(ctx, 413, 'too_large', GENERIC);
     const ciphertext = read.body?.[ENVELOPE_FIELD];
     if (typeof ciphertext !== 'string' || ciphertext === '') {

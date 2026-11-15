@@ -20,10 +20,10 @@ export const DISCOVERY_SLOT = Symbol.for('@adonis-agora/discovery');
 
 /** The part of telescope's discovery crypto uses. Reads are synchronous (a local snapshot). */
 export interface AgoraDiscovery {
-  /** The app name → its origin, or undefined when unknown. */
-  resolve(name: string): string | undefined;
-  /** The app an origin belongs to, or undefined when unknown. */
+  /** The app an origin belongs to, or undefined when unknown. The only method crypto requires. */
   appOf(origin: string): string | undefined;
+  /** The app name → its origin. Only needed before telescope rewrote a symbolic host. */
+  resolve?(name: string): string | undefined;
   /** Announced when the snapshot changes. Crypto does not cache, so it does not need to subscribe. */
   subscribe?(listener: (apps: Record<string, string>) => void): () => void;
 }
@@ -92,9 +92,7 @@ export function agoraDiscovery(): AgoraDiscovery | undefined {
   const value = (globalThis as Record<symbol, unknown>)[DISCOVERY_SLOT] as
     | Partial<AgoraDiscovery>
     | undefined;
-  if (!value || typeof value.resolve !== 'function' || typeof value.appOf !== 'function') {
-    return undefined;
-  }
+  if (!value || typeof value.appOf !== 'function') return undefined;
   return value as AgoraDiscovery;
 }
 
@@ -122,8 +120,9 @@ function appOf(url: URL, outbound: ResolvedOutboundEnvelope): string | undefined
     if (typeof app === 'string' && app !== '') return app;
     // The symbolic host has not been rewritten yet (crypto booted before telescope): the name is
     // still the app, so the body can be sealed now — the URL itself stays telescope's business.
-    if (SINGLE_LABEL.test(url.hostname)) {
-      const resolved = sync(() => discovery.resolve(url.hostname));
+    if (SINGLE_LABEL.test(url.hostname) && typeof discovery.resolve === 'function') {
+      const resolve = discovery.resolve.bind(discovery);
+      const resolved = sync(() => resolve(url.hostname));
       if (typeof resolved === 'string' && resolved !== '') return url.hostname;
     }
   }
@@ -153,6 +152,12 @@ const DISPATCHER_V2 = Symbol.for('undici.globalDispatcher.2');
 
 function headersOf(headers: DispatcherOptions['headers']): Record<string, string> {
   const result: Record<string, string> = {};
+  // A `Headers` instance is iterable but has no own enumerable properties, so `Object.entries`
+  // would silently drop every header (including the authorization one).
+  if (typeof Headers !== 'undefined' && headers instanceof Headers) {
+    for (const [name, value] of headers.entries()) result[String(name).toLowerCase()] = value;
+    return result;
+  }
   if (Array.isArray(headers)) {
     if (headers.every((entry) => Array.isArray(entry))) {
       for (const [name, value] of headers as unknown as Array<[string, string]>) {
@@ -162,6 +167,13 @@ function headersOf(headers: DispatcherOptions['headers']): Record<string, string
       for (let index = 0; index + 1 < headers.length; index += 2) {
         result[String(headers[index]).toLowerCase()] = String(headers[index + 1]);
       }
+    }
+    return result;
+  }
+  if (headers && typeof (headers as unknown as Iterable<unknown>)[Symbol.iterator] === 'function') {
+    for (const entry of headers as unknown as Iterable<[string, string]>) {
+      if (!Array.isArray(entry) || entry.length !== 2) continue;
+      result[String(entry[0]).toLowerCase()] = String(entry[1]);
     }
     return result;
   }

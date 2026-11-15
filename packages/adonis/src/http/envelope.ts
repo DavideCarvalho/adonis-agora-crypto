@@ -28,6 +28,7 @@ declare module '@adonisjs/core/http' {
     /** Set when the request arrived sealed, by the route middleware or the provider's global one. */
     envelope?: CryptoEnvelopeState;
   }
+  /* The shape authkit-client declares: the same `AgoraRequestContext`, the same property type. */
   interface HttpContext {
     agora: AgoraRequestContext;
     /** @deprecated read `ctx.agora.envelope` — kept so the first route-middleware adopters keep working. */
@@ -35,15 +36,10 @@ declare module '@adonisjs/core/http' {
   }
 }
 
-/** What crypto contributes to `ctx.agora` (the shared request context every Agora lib writes to). */
-export interface CryptoEnvelopeContext {
-  envelope?: CryptoEnvelopeState;
-}
-
 /** Publishes the opened envelope on the shared request context (and the deprecated alias). */
 export function setEnvelopeState(ctx: HttpContext, state: CryptoEnvelopeState): void {
   const context = ctx as unknown as {
-    agora?: CryptoEnvelopeContext;
+    agora?: { envelope?: CryptoEnvelopeState };
     cryptoEnvelope?: CryptoEnvelopeState;
   };
   // `agora` is normally created by the first lib that needs it; never assume we are the first.

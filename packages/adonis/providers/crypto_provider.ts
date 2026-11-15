@@ -414,11 +414,20 @@ export default class CryptoProvider {
       warn: (message) => logger.warn(message),
     });
     if (!installed.inbound) return;
-    runtime.envelope = installed.inbound;
-    const server = (await this.app.container.make('server')) as {
-      use(middleware: unknown[]): unknown;
-    };
-    server.use([() => import('../src/http/envelope_global_middleware.js')]);
+    try {
+      const server = (await this.app.container.make('server')) as {
+        use(middleware: unknown[]): unknown;
+      };
+      server.use([() => import('../src/http/envelope_global_middleware.js')]);
+      runtime.envelope = installed.inbound;
+    } catch (error) {
+      // No HTTP server in this process (an ace command, a worker): outbound stays on, the inbound
+      // half simply has nothing to attach to.
+      logger.warn(
+        `[@adonis-agora/crypto] envelope: inbound middleware not registered (${(error as Error).message}); outbound sealing stays on`,
+      );
+      return;
+    }
     logger.info(
       `[@adonis-agora/crypto] envelope on ${envelope.key !== undefined ? `key "${envelope.key}"` : 'the accepted keys'} (inbound + outbound)`,
     );

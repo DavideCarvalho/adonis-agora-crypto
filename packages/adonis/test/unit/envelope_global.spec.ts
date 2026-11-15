@@ -231,6 +231,36 @@ describe('envelope interceptor — target identification', () => {
     expect(sent[0]!.headers[ENVELOPE_HEADER]).toBe(ENVELOPE_VERSION);
   });
 
+  it('seals with a discovery slot that only implements appOf (resolve is optional)', async () => {
+    (globalThis as Record<symbol, unknown>)[DISCOVERY_SLOT] = {
+      appOf: (origin: string) => (origin === 'https://billing.internal' ? 'billing' : undefined),
+    };
+    const sent = await install({ key: 'svc-hub' });
+
+    globals[V1]!.dispatch(post('https://billing.internal/v1/charge', '{"a":1}'), undefined);
+    expect(sent[0]!.headers[ENVELOPE_HEADER]).toBe(ENVELOPE_VERSION);
+
+    // Without `resolve`, a symbolic host cannot be identified yet: telescope must rewrite first.
+    globals[V1]!.dispatch(post('http://billing/v1/charge', '{"a":1}'), undefined);
+    expect(sent[1]!.headers[ENVELOPE_HEADER]).toBeUndefined();
+  });
+
+  it('keeps every header when the dispatcher hands it a Headers instance', async () => {
+    publishDiscovery({ billing: 'https://billing.internal' });
+    const sent = await install({ key: 'svc-hub' });
+
+    const options = post('https://billing.internal/v1/charge', '{"a":1}');
+    options.headers = new Headers({
+      'content-type': 'application/json',
+      authorization: 'Bearer tenant-token',
+    }) as never;
+    globals[V1]!.dispatch(options, undefined);
+
+    expect(sent[0]!.headers.authorization).toBe('Bearer tenant-token');
+    expect(sent[0]!.headers[ENVELOPE_HEADER]).toBe(ENVELOPE_VERSION);
+    expect(sent[0]!.headers['content-type']).toBe('application/json');
+  });
+
   it('composes with an interceptor that was already there instead of replacing it', async () => {
     publishDiscovery({ billing: 'https://billing.internal' });
     const seen: string[] = [];
