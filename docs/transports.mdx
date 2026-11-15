@@ -49,13 +49,26 @@ That also means the broker never replaces the API: it is an extra consumer next 
 | --- | --- | --- |
 | `transports.http({ url, fetch?, timeoutMs? })` (default) | request/response over `POST /_crypto/v1/transport` | none (global `fetch`; `fetch` lets you add mTLS, a proxy or the crypto envelope) |
 | `transports.redis({ connection, prefix?, timeoutMs? })` | request on `<prefix>:requests`, reply on `<prefix>:reply:<id>` | `@adonisjs/redis` (or any ioredis-shaped connection) |
+| `transports.bullmq({ connection, queueName?, prefix?, timeoutMs? })` | native reply: `job.waitUntilFinished(queueEvents)` returns the worker's result | `bullmq` (loaded lazily) |
+| `transports.queue({ connection, dispatch, consume, prefix?, timeoutMs? })` | request via `@adonisjs/queue`, reply on Redis (`<prefix>:reply:<id>`) — the queue has no await-result | `@adonisjs/queue` |
 
 Both carry the same envelope (`v`, `id`, `operation`, `input`, `token`, `issuedAt`), so switching
 drivers is a config change, not a code change.
 
-`queue`, `bullmq` and `durable` are the next drivers: they need a reply channel (a broker queue is
-one-way) and the app's ready queue/worker instance, so they land as `transports.broker(...)`
-adapters. The Redis driver is the reference implementation of that seam.
+### Reply per driver
+
+- **BullMQ** has a reply built in: `Queue.add()` + `job.waitUntilFinished(queueEvents)` resolves with
+  the worker's return value, so the reply is the job result and a failed job is the dead-letter
+  (`removeOnFail`). `transports.bullmq` uses that: no extra reply key.
+- **`@adonisjs/queue`** (`@boringnode/queue`) does **not**: `Job.dispatch()` resolves `{ jobId }` and
+  there is no "wait for the result". So `transports.queue` carries the request on the queue and the
+  reply on the queue adapter's Redis (`<prefix>:reply:<id>`, the same contract as the Redis driver).
+  The app supplies its job's `dispatch` and its worker's consumer (`consume`), so the job is just a
+  carrier for the envelope.
+- **durable** is the next driver: its transport is task dispatch to workers (`dispatch` + `onResult`),
+  so a call needs the control plane to run a durable worker for the crypto handler and the tenant to
+  dispatch a task; the reply is the step result. That is an app-level integration, documented rather
+  than faked.
 
 ## What every driver guarantees
 
