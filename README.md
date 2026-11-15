@@ -10,6 +10,7 @@ packages/core       @adonis-agora/crypto-core      wire contracts, key types, ca
 packages/client     @adonis-agora/crypto-client    typed client, KMS adapter, remote signer
 packages/adonis     @adonis-agora/crypto           the server: keys, operations, audit, HTTP API
 packages/dashboard  @adonis-agora/crypto-dashboard the console (React SPA)
+packages/integrations @adonis-agora/crypto-integrations 0.x seams for authkit, agent, config, durable, flags, http
 ```
 
 ```sh
