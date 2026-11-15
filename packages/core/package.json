@@ -1,6 +1,6 @@
 {
   "name": "@adonis-agora/crypto-core",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Key types, capability vocabulary, wire contracts and error codes shared by @adonis-agora/crypto and @adonis-agora/crypto-client.",
   "license": "MIT",
   "repository": {
