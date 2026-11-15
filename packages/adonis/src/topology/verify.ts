@@ -203,11 +203,15 @@ export function bearerToken(ctx: HttpContext): string | undefined {
 
 /** The headers a verifier may need, lowercased. */
 export function requestHeaders(ctx: HttpContext): Record<string, string | undefined> {
-  const headers = (ctx.request as unknown as { headers?: () => Record<string, string | string[]> })
-    .headers;
-  if (typeof headers !== 'function') return {};
+  const request = ctx.request as unknown as {
+    headers?: (() => Record<string, string | string[]>) | Record<string, string | string[]>;
+  };
+  // Adonis exposes `headers()` as a method that reads `this.request`: calling the detached function
+  // throws ("Cannot read properties of undefined"), so it must be invoked on the request itself.
+  const headers =
+    typeof request.headers === 'function' ? request.headers.call(ctx.request) : request.headers;
   const out: Record<string, string | undefined> = {};
-  for (const [name, value] of Object.entries(headers())) {
+  for (const [name, value] of Object.entries(headers ?? {})) {
     out[name.toLowerCase()] = Array.isArray(value) ? value[0] : value;
   }
   return out;

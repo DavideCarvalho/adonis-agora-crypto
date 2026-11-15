@@ -100,6 +100,8 @@ export {
 export {
   type ControlPlaneConfig,
   type CryptoConfig,
+  type CryptoEnvelopeConfig,
+  type CryptoEnvelopeTarget,
   defineConfig,
   type Factory,
   type FactoryContext,
@@ -133,6 +135,7 @@ export {
   cryptoEnvelopeReply,
   serviceCipher,
 } from './http/envelope.js';
+export { type AgoraDiscovery, ENVELOPE_KEY_HEADER } from './http/envelope_global.js';
 export type { CryptoOperations } from './operations.js';
 export { localOperations, remoteOperations } from './operations.js';
 export type { CryptoRuntime, CryptoStatus } from './runtime.js';

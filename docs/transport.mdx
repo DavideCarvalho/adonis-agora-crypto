@@ -11,6 +11,84 @@ whose tokens hold that key) can open.
 The encryption is per *hop*, not per process: an ordinary `fetch` on the caller side and a middleware
 on the receiver side, with the keys managed like any other key.
 
+## Configuration only: the hub recipe
+
+When the pieces below are configured, **no app code changes**: `fetch` keeps sealing outbound JSON to
+the apps it knows, and every route keeps receiving plaintext.
+
+```ts title="config/crypto.ts"
+export default defineConfig({
+  topology: 'tenant', // or 'control-plane' on the hub
+  tenant: { url: env.get('CRYPTO_URL'), partition: 'billing', token },
+  envelope: { key: 'svc-hub' }, // the shared aes256-gcm key both sides hold
+})
+```
+
+The provider installs both halves from that block alone:
+
+- **outbound** — an undici interceptor **composed onto** the global dispatcher (never replacing it, so
+  telescope's `traceparent` interceptor and authkit-client's service-token interceptor stay in the
+  chain). It seals the JSON body of a request to a known app, exactly and only to that app's origin.
+- **inbound** — a **server** middleware registered by the provider (no `start/kernel.ts` edit) that
+  opens the envelope before the body parser hands the body to the route.
+
+### Which app is the target
+
+The app name for an origin comes from telescope's **service discovery**, read from the shared slot
+`Symbol.for('@adonis-agora/discovery')` (`appOf(origin)` / `resolve(name)`) — crypto never imports
+telescope, and the order the providers boot in does not matter. Telescope's interceptor rewrites
+`fetch('http://billing/…')` to the real origin first; crypto seals by the app identity, so it does not
+care which URL form the app used.
+
+Without telescope (or for an origin discovery does not know), the static map is the fallback:
+
+```ts title="config/crypto.ts"
+envelope: {
+  key: 'svc-hub',
+  targets: { billing: 'https://billing.internal' }, // exact origins only
+}
+```
+
+An origin that is neither discovered nor configured is **not touched** — other traffic keeps going out
+in plaintext, exactly as before. Crypto's own API (`/_crypto`) is never sealed (sealing it would need
+another seal).
+
+### The receiver
+
+```ts title="app/controllers/billing_controller.ts"
+async charge(ctx: HttpContext) {
+  const body = ctx.request.body()             // already the plaintext
+  const key = ctx.agora.envelope?.key         // 'svc-hub', or undefined when unsealed
+  // ...
+}
+```
+
+`request.body()`, `request.all()` and `request.validateUsing()` read the opened payload, so validators
+and controllers stay as they are. The opened state lives on the shared request context
+(`ctx.agora.envelope`, `{ key, issuedAt, payload }`), next to what the other Agora libs put there.
+
+A request without an envelope passes through unless `envelope.required` is set. Every decrypt failure —
+tampered, stale, wrong key, foreign AAD — is the **same** `400`
+(`{ code: 'invalid', error: 'crypto: the request envelope could not be opened' }`): the caller learns
+nothing about why. The reason is logged on the server only.
+
+### What the block accepts
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `key` | — | the shared `aes256-gcm` key name; required whenever outbound is on |
+| `targets` | — | `name → origin` (or `{ url, key }`), the fallback when discovery is absent |
+| `accept` | `[key]` | key names this app opens inbound (`x-crypto-key`) |
+| `partition` | the app's own | whose keys hold the shared key; required on a control plane |
+| `aad` | — | extra context bound into every envelope; both sides must match |
+| `required` | `false` | refuse a request that carries no envelope |
+| `maxAgeSec` / `clockSkewSec` | `300` / `60` | freshness and tolerated clock skew |
+| `maxBytes` | 2 MiB | largest envelope accepted |
+| `inbound` / `outbound` | `true` | install only one half |
+
+A form/multipart/binary body is never sealed (sealing would change its encoding); app-to-app JSON bodies
+and `fetch`'s `text/plain` default are.
+
 ## One key per hop
 
 ```sh
@@ -51,7 +129,8 @@ router
 
 The middleware decrypts before the controller runs and **replaces the request body**, so
 `request.body()`, `request.all()` and `request.validateUsing()` read the payload with no controller
-change. It also exposes `ctx.cryptoEnvelope` (`{ key, issuedAt, payload }`).
+change. It also exposes the opened state on `ctx.agora.envelope` (`{ key, issuedAt, payload }`);
+`ctx.cryptoEnvelope` remains as a deprecated alias.
 
 On a tenant (`topology: 'tenant'`) the middleware takes the client instead of the service:
 
@@ -68,7 +147,7 @@ envelope is a `400` with `{ error, code }` — never a half-decrypted body.
 import { cryptoEnvelopeReply } from '@adonis-agora/crypto'
 
 async evaluate(ctx: HttpContext) {
-  const payload = ctx.cryptoEnvelope!.payload as { rule: string }
+  const payload = ctx.agora.envelope!.payload as { rule: string }
   return cryptoEnvelopeReply(ctx, { enabled: await ruleIsOn(payload.rule) }, {
     service, partition: 'flags', key: 'svc-flags',
   })
