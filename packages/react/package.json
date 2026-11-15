@@ -1,6 +1,6 @@
 {
   "name": "@adonis-agora/crypto-react",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Browser SDK for the asymmetric half of @adonis-agora/crypto: X25519 key pairs, sealTo/openWith byte-compatible with the Agora crypto kit, a passphrase-sealed identity, and React hooks \u2014 so a share is only readable by the recipient's device.",
   "license": "MIT",
   "repository": {
