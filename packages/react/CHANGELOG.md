@@ -1,5 +1,19 @@
 # @adonis-agora/crypto-react
 
+## 0.1.3
+
+### Patch Changes
+
+- [#21](https://github.com/DavideCarvalho/adonis-agora-crypto/pull/21) [`eccec14`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/eccec14f43987d623ddf727a17449ecc8b7b07c2) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Declare independent versioning on every published crypto package:
+  `"agora": { "versioning": "independent" }`.
+  
+  `agora:doctor`'s "Agora versions line up" check warns when a 0.x Agora package sits next to the 1.x rc
+  libs, which is a false positive for these packages: they keep their own 0.x line on purpose. The
+  doctor already honours the marker (it is how `@adonis-agora/cms` and `authkit-poppy` opt out); the
+  packages just were not declaring it. `crypto-dashboard` already did.
+- Updated dependencies [[`eccec14`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/eccec14f43987d623ddf727a17449ecc8b7b07c2)]:
+  - @adonis-agora/crypto-core@0.4.1
+
 ## 0.1.2
 
 ### Patch Changes
