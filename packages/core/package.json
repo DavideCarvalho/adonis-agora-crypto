@@ -1,0 +1,54 @@
+{
+  "name": "@adonis-agora/crypto-core",
+  "version": "0.0.0",
+  "description": "Key types, capability vocabulary, wire contracts and error codes shared by @adonis-agora/crypto and @adonis-agora/crypto-client.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DavideCarvalho/adonis-agora-crypto.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://davidecarvalho.github.io/agora/docs/crypto",
+  "bugs": {
+    "url": "https://github.com/DavideCarvalho/adonis-agora-crypto/issues"
+  },
+  "keywords": [
+    "adonisjs",
+    "adonis",
+    "crypto",
+    "kms",
+    "vault",
+    "agora"
+  ],
+  "author": "Davi Carvalho <davi@goflip.ai>",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "pnpm run build",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "typescript": "7.0.2",
+    "vitest": "5.1.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

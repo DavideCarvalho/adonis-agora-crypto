@@ -1,0 +1,104 @@
+---
+title: Getting started
+description: Install the package, choose where keys live, and create the first key.
+icon: Rocket
+---
+
+```sh
+node ace add @adonis-agora/crypto
+```
+
+The installer registers the provider and the commands, publishes `config/crypto.ts`, and writes a
+migration for the three tables this package owns (`crypto_keys`, `crypto_key_versions`,
+`crypto_audit`). The provider creates them at boot too (`autoCreateSchema: true`), so a first local
+run needs no migration.
+
+## Where the keys live
+
+```ts title="config/crypto.ts"
+import { defineConfig, stores } from '@adonis-agora/crypto'
+
+export default defineConfig({
+  topology: 'standalone',
+  app: 'streaming',
+  // The default: Postgres, MySQL or SQLite through Lucid.
+  store: stores.lucid(),
+  // For a throwaway local app, keep everything in process memory:
+  // store: stores.memory(),
+})
+```
+
+Only sealed key material reaches the store. What seals it is the **root keyring**:
+
+1. `crypto.keys` in this file (newest first), when this package should own the root keys;
+2. otherwise the app's own `encryption` service (`config/encryption.ts` and `APP_KEY`) — the default;
+3. otherwise `APP_KEY` alone.
+
+A cloud KMS can be the root instead: see [KMS](/docs/crypto/kms).
+
+```ts title="config/crypto.ts (root keys owned by this package)"
+export default defineConfig({
+  topology: 'standalone',
+  app: 'streaming',
+  crypto: {
+    // The first key seals new material; every key opens. Rotate by prepending a new one.
+    keys: [env.get('CRYPTO_ROOT_KEY')],
+  },
+})
+```
+
+## The first key
+
+```sh
+node ace crypto:keys:create media --type aes256-gcm --description "media URLs"
+node ace crypto:keys:list
+```
+
+```ts
+import crypto from '@adonis-agora/crypto/services/main'
+
+const { ciphertext } = await crypto.encrypt({ key: 'media', plaintext: 'https://cdn/x.mp4' })
+const { plaintext, version } = await crypto.decrypt({ key: 'media', ciphertext })
+```
+
+The ciphertext is self-describing (`agora:ct1:media:1:…`): it names the key and the version that
+sealed it, so `decrypt` needs nothing else, and a later `rotate` does not break it.
+
+## A central server
+
+On the server, switch `topology` to `control-plane` and add a verifier; on every app, switch to
+`tenant` and point it at the server. Nothing else in the app changes.
+
+```ts title="config/crypto.ts (server)"
+export default defineConfig({
+  topology: 'control-plane',
+  verifyTenant: authkitTenantVerifier({ issuer: env.get('AUTHKIT_ISSUER'), resource: 'urn:agora:crypto' }),
+})
+```
+
+```ts title="config/crypto.ts (app)"
+export default defineConfig({
+  topology: 'tenant',
+  tenant: {
+    url: env.get('CRYPTO_URL'),
+    partition: 'streaming',
+    token: authkitTenantToken({
+      issuer: env.get('AUTHKIT_ISSUER'),
+      clientId: env.get('AUTHKIT_CLIENT_ID'),
+      clientSecret: env.get('AUTHKIT_CLIENT_SECRET'),
+      resource: 'urn:agora:crypto',
+    }),
+  },
+})
+```
+
+The tenant's first boot asks the server `whoami` and logs the answer; a wrong token or URL is a
+warning, not a boot failure, so a deploy during an outage still starts.
+
+## Health check
+
+```sh
+node ace agora:doctor --lib crypto --deep
+```
+
+See [Doctor](/docs/crypto/doctor) for what each check looks at.
