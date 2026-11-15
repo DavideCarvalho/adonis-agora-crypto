@@ -291,10 +291,14 @@ describe('envelope interceptor — target identification', () => {
         seen.push(`trace:${options.path}`);
         return dispatch(options, handler);
       };
-    globals[V1] = dispatcherWith((options) => {
+    const existing = dispatcherWith((options) => {
       seen.push(`terminal:${options.path}`);
       return true;
     }).compose([trace]);
+    // Both slots so the probe lands in whichever one this Node's `fetch` reads (`.1` on 24,
+    // `.2` on 26) — and so the installer does not trigger a real `data:` load over this fake.
+    globals[V1] = existing;
+    globals[V2] = existing;
 
     await installCryptoEnvelope({
       config: { key: 'svc-hub' },
