@@ -609,6 +609,66 @@ describe('audit trail', () => {
     expect(filtered.data).toHaveLength(1);
   });
 
+  it('records the caller’s context on an open, and never the plaintext', async () => {
+    const crypto = fresh();
+    await crypto.service.createKey(crypto.principal, { name: 'orders', type: 'aes256-gcm' });
+    const encrypted = await crypto.service.encrypt(crypto.principal, {
+      key: 'orders',
+      plaintext: 'never in the audit',
+    });
+    await crypto.service.decrypt(crypto.principal, {
+      key: 'orders',
+      ciphertext: encrypted.ciphertext,
+      context: 'user:42',
+    });
+    await crypto.service.decrypt(crypto.principal, {
+      key: 'orders',
+      ciphertext: encrypted.ciphertext,
+    });
+    const page = await crypto.service.audit(crypto.principal, { page: 1, size: 10 });
+    const rows = page.data.filter((row) => row.operation === 'decrypt');
+    expect(rows.find((row) => row.metadata?.context === 'user:42')).toBeDefined();
+    expect(rows.find((row) => row.metadata?.context === undefined)).toBeDefined();
+    expect(JSON.stringify(page.data)).not.toContain('never in the audit');
+
+    await expect(
+      crypto.service.decrypt(crypto.principal, {
+        key: 'orders',
+        ciphertext: encrypted.ciphertext,
+        context: `x${'y'.repeat(200)}`,
+      }),
+    ).rejects.toMatchObject({ code: 'invalid' });
+    await expect(
+      crypto.service.decrypt(crypto.principal, {
+        key: 'orders',
+        ciphertext: encrypted.ciphertext,
+        context: 'line\nbreak',
+      }),
+    ).rejects.toMatchObject({ code: 'invalid' });
+  });
+
+  it('keeps the context on a refused open, so a probe is traceable', async () => {
+    const crypto = fresh();
+    await crypto.service.createKey(crypto.principal, { name: 'orders', type: 'aes256-gcm' });
+    const { ciphertext } = await crypto.service.encrypt(crypto.principal, {
+      key: 'orders',
+      plaintext: 'x',
+    });
+    const reader = {
+      partition: 'shop',
+      capabilities: ['crypto:encrypt:orders'],
+      actor: 'svc:probe',
+    };
+    await expect(
+      crypto.service.decrypt(reader, { key: 'orders', ciphertext, context: 'user:99' }),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    const page = await crypto.service.audit(crypto.principal, { page: 1, size: 10 });
+    expect(page.data.find((row) => row.result === 'denied')).toMatchObject({
+      metadata: { context: 'user:99' },
+      actor: 'svc:probe',
+    });
+  });
+
   it('summarizes the last 24h for the console', async () => {
     const crypto = memoryCrypto();
     await crypto.service.createKey(crypto.principal, { name: 'orders', type: 'aes256-gcm' });

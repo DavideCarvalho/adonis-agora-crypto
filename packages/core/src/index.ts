@@ -205,6 +205,11 @@ export interface DecryptInput {
   key: string;
   ciphertext: string;
   aad?: string;
+  /**
+   * Who/why this open is for, recorded in the audit trail (`metadata.context`). NEVER put the
+   * plaintext or a secret here: it is stored as-is, e.g. `user:42`, `grant:7`, `boot`.
+   */
+  context?: string;
 }
 
 export interface DecryptResult {
@@ -217,6 +222,8 @@ export interface RewrapInput {
   key: string;
   ciphertext: string;
   aad?: string;
+  /** Same as {@link DecryptInput.context}: recorded in the audit trail, never a secret. */
+  context?: string;
 }
 
 export interface RewrapResult {
@@ -229,6 +236,8 @@ export interface DataKeyInput {
   /** The key that wraps the data key (an `aes256-gcm` key). */
   key: string;
   aad?: string;
+  /** Same as {@link DecryptInput.context}: recorded in the audit trail, never a secret. */
+  context?: string;
   /** Return the plaintext data key too. Default `true`; `false` is the "wrapped only" mode. */
   plaintext?: boolean;
 }

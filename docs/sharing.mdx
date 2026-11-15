@@ -81,6 +81,17 @@ Revoking is a database action (the grant stops being served); the key can be ret
 (`crypto:keys:policy doctor-42 --min-decryption-version N` only affects the server-held mode — a
 recipient-held ciphertext stays openable by whoever has the private key, which is the point).
 
+## Who audits the open
+
+| Mode | Who performs the open | Who audits it |
+| --- | --- | --- |
+| server-held (`crypto.decrypt`) | the crypto server | the crypto server, automatically (`decrypt` with key, version, actor, and the `context` the app sent) |
+| recipient-held (`sealTo`/`openWith`) | the recipient's device | **the app**: the server never sees it, so record the event yourself (grant id, `kid`, who, when) |
+
+For server-held, pass `context` on the decrypt (`user:42`, `grant:7`) and the audit answers "who opened
+what". For recipient-held there is no server-side trace at all: if the business needs "who viewed this
+exam", the app must emit the event.
+
 ## Why not just a shared symmetric key?
 
 A symmetric share means the server, every backup and every admin can open it, and revoking means

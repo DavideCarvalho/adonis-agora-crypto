@@ -166,7 +166,7 @@ export function configCrypto(options: ConfigCryptoOptions): ConfigCrypto {
       if (typeof plaintext !== 'string') throw new Error('crypto: seal takes a string');
       const key = sealOptions.key ?? sealKey;
       const aad = sealOptions.aad ?? configCryptoAad(entry);
-      const { ciphertext } = await cipher.encrypt({ key, plaintext, aad });
+      const { ciphertext } = await cipher.encrypt({ key, plaintext, aad, context: aad });
       return { key, ciphertext };
     },
 
@@ -177,6 +177,8 @@ export function configCrypto(options: ConfigCryptoOptions): ConfigCrypto {
         key: parsed.key,
         ciphertext: parsed.ciphertext,
         aad,
+        // The entry path, in clear, so the crypto audit says which secret was opened.
+        context: aad,
       });
       return plaintext;
     },
