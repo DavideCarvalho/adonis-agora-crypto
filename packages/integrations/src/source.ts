@@ -1,6 +1,6 @@
 import type { CryptoService } from '@adonis-agora/crypto';
 import { serviceCipher } from '@adonis-agora/crypto';
-import type { CryptoClient, EnvelopeCipher } from '@adonis-agora/crypto-client';
+import type { CryptoClient, EnvelopeCipher } from '@adonis-agora/crypto-core';
 
 /**
  * Where the keys live. Both work with every integration:

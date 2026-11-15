@@ -1,80 +1,97 @@
 ---
-title: Deployment topologies
-description: What runs where — standalone, control plane, tenant — and one end-to-end example.
+title: Central server
+description: One crypto server many apps connect to — same package on both sides, same idempotent config, `topology` picks the role.
 icon: Network
 ---
 
-Every Agora lib has the same three topologies, and the same config names:
-`topology: 'standalone' | 'control-plane' | 'tenant'`, a top-level `verifyTenant`, and
-`tenant: { url?, partition, token }` on the app side.
+With several apps, run crypto in one place. The **control plane** owns the keys, the audit and the
+console. Each app is a **tenant**: it calls the same operations, and the package sends them over HTTP
+with its token. There is no second package to install — `@adonis-agora/crypto` is the server **and**
+the tenant side, exactly like `@adonis-agora/flags` and `@adonis-agora/durable`.
 
-## standalone
-
-The app holds its own keys and calls itself in process. No HTTP, no token: the service is the
-server.
+`topology` takes the same three values in every Agora lib:
 
 ```ts
-export default defineConfig({ topology: 'standalone', app: 'streaming' })
+topology: 'standalone' | 'control-plane' | 'tenant'
 ```
 
-Good for one app, local development, or a first deploy that later moves to a central server.
+## The control plane
 
-## control-plane
+```ts title="config/crypto.ts (crypto server)"
+import { authkitTenantVerifier } from '@adonis-agora/authkit-client'
+import { defineConfig } from '@adonis-agora/crypto'
 
-The app is the server. It mounts `/_crypto/v1`, verifies tenants' tokens, keeps keys and the audit
-trail, and serves the console. The same app also has the in-process service, so its own code calls
-`crypto.encrypt(...)` without a hop.
-
-```ts
 export default defineConfig({
   topology: 'control-plane',
-  verifyTenant: authkitTenantVerifier({ issuer: env.get('AUTHKIT_ISSUER'), resource: 'urn:agora:crypto' }),
-  prefix: '/_crypto',
+  // TOP LEVEL, the same place in every lib. Or sharedSecretVerifier({ partitions }).
+  verifyTenant: authkitTenantVerifier({
+    issuer: env.get('AUTHKIT_ISSUER'),
+    resource: 'urn:agora:crypto',
+  }),
 })
 ```
 
-Exempt the tenant API from CSRF (server-to-server calls carry no cookie):
+Tenants authenticate with tokens, not cookies: exempt the tenant API from `@adonisjs/shield`'s CSRF
+check, or it refuses their calls.
 
-```ts title="config/shield.ts"
+```ts title="config/shield.ts (crypto server)"
 import { cryptoCsrfExceptions } from '@adonis-agora/crypto'
 
-export default defineConfig({
-  csrf: { exceptRoutes: (ctx) => cryptoCsrfExceptions(ctx.request.url()) },
-})
+csrf: { exceptRoutes: (ctx) => cryptoCsrfExceptions(ctx.request.url()) },
 ```
 
-## tenant
+It serves, under `/_crypto`:
 
-The app holds no keys. Every operation is an HTTP call to the server, with a token from
-`authkitTenantToken` or a shared secret. Boot checks `whoami` and logs the answer.
+- `POST /v1/encrypt`, `/v1/decrypt`, `/v1/rewrap`, `/v1/datakeys`, `/v1/sign`, `/v1/verify`, `/v1/hmac`
+  (and the batch variants);
+- `GET/POST /v1/keys`, `POST /v1/keys/:name/rotate`, `PATCH/DELETE /v1/keys/:name`,
+  `GET /v1/keys/:name/public|jwks|export`;
+- `GET /v1/audit` and `GET /v1/whoami`;
+- the console at `/_crypto` (API `/_crypto/api`), gated by `console.authorize`.
 
-```ts
+## A tenant
+
+```ts title="config/crypto.ts (an app)"
+import { authkitTenantToken } from '@adonis-agora/authkit-client'
+import { defineConfig } from '@adonis-agora/crypto'
+
 export default defineConfig({
   topology: 'tenant',
   tenant: {
-    url: env.get('CRYPTO_URL'),
-    partition: 'streaming',
-    token: env.get('CRYPTO_TOKEN'),
-    timeoutMs: 5000,
-    retries: 2,
+    url: env.get('CRYPTO_URL'),          // https://crypto.example.com/_crypto
+    partition: 'streaming',              // this app's name on the server
+    token: authkitTenantToken({
+      issuer: env.get('AUTHKIT_ISSUER'),
+      clientId: env.get('CRYPTO_CLIENT_ID'),
+      clientSecret: env.get('CRYPTO_CLIENT_SECRET'),
+      resource: 'urn:agora:crypto',
+    }),
   },
 })
 ```
 
-## Moving from local to central
-
-The calls do not change; only `config/crypto.ts` does.
-
 ```ts
-// before
-await crypto.encrypt({ key: 'media', plaintext: url })
+import crypto from '@adonis-agora/crypto/services/main'
 
-// after (the app is a tenant now): same line
-await crypto.encrypt({ key: 'media', plaintext: url })
+// Identical calls in every topology: in process on a server, over HTTP on a tenant.
+const { ciphertext } = await crypto.encrypt({ key: 'media', plaintext: url })
 ```
 
-Create the same key names on the server before the switch, and keep the app a tenant from then on:
-new ciphertexts are made by the server's keys.
+The tenant keeps no key material: the server holds the keys, enforces the token's capabilities
+(`crypto:encrypt:<key>`, `crypto:decrypt:<key>`, …) and audits every call. On boot it asks `whoami`
+and logs the answer; a wrong token or URL is a warning, not a boot failure.
+
+## Moving from standalone to central
+
+Create the key names on the server, then change only `config/crypto.ts`:
+
+```ts
+export default defineConfig({ topology: 'standalone', app: 'streaming' })  // before
+export default defineConfig({ topology: 'tenant', tenant: { … } })         // after
+```
+
+Calls do not change. Ciphertext made locally with `standalone` stays readable only by the local key,
+so rewrap (or start fresh) when the data is expected to be served by the central server.
 
 ## One end-to-end example
 
@@ -90,14 +107,14 @@ authkit-server            crypto-server (_crypto)          app A (tenant)
 
 1. authkit holds one service tenant per app, each allowed `urn:agora:crypto` with the scopes it needs.
 2. The crypto server verifies tokens through discovery, keeps the keys, seals the material with its
-   own root (the app's `encryption` service or a cloud KMS), and audits every call.
-3. App A and app B call the server; a `decrypt` with app B's token can never touch app A's keys,
-   because the partition comes from the token.
+   own root (the app's `encryption` service, `crypto.keys` or a cloud KMS), and audits every call.
+3. App A and app B call the server. A `decrypt` with app B's token can never touch app A's keys: the
+   partition comes from the token.
 
 ## Scaling
 
-- **Several replicas** share the same database; rotation is a transaction, so two replicas rotating
-  at once produce two ordered versions instead of losing one.
+- **Several replicas** share the same database; rotation is a transaction, so two replicas rotating at
+  once produce two ordered versions instead of losing one.
 - **Each replica** needs the same root: the same `APP_KEY`/`config/encryption.ts`, the same
   `crypto.keys`, or the same cloud KMS. A missing root makes sealed material unreadable, which the
   [doctor](/docs/crypto/doctor) reports before it hurts.

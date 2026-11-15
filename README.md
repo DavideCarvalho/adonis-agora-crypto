@@ -6,9 +6,8 @@ and no key material ever leaves the server. Part of the [Agora](https://davideca
 ecosystem.
 
 ```
-packages/core       @adonis-agora/crypto-core      wire contracts, key types, capabilities
-packages/client     @adonis-agora/crypto-client    typed client, KMS adapter, remote signer
-packages/adonis     @adonis-agora/crypto           the server: keys, operations, audit, HTTP API
+packages/core       @adonis-agora/crypto-core      wire contracts, key types, capabilities, typed client, KMS adapter, remote signer
+packages/adonis     @adonis-agora/crypto           the server (standalone/control-plane) and the tenant side: keys, operations, audit, HTTP API
 packages/dashboard  @adonis-agora/crypto-dashboard the console (React SPA)
 packages/integrations @adonis-agora/crypto-integrations 0.x seams for authkit, agent, config, durable, flags, http
 packages/react      @adonis-agora/crypto-react    browser/React X25519 identity, sealTo/openWith, passphrase-sealed storage

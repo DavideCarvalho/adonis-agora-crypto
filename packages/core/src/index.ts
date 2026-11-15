@@ -410,3 +410,42 @@ export interface CryptoOverview {
   errors24h: number;
   lastOperationAt?: string;
 }
+
+/* ------------------------------------------------------------------------------------------------ */
+/* The typed client and its building blocks                                                        */
+/*                                                                                                  */
+/* They live here (and not in a `crypto-client` package) because they are the only part of this     */
+/* ecosystem a non-Adonis runtime needs: the tenant side of a crypto server, a worker, a script.     */
+/* They depend on `fetch`/`Buffer` only, never on `@adonisjs/core`.                                 */
+/* ------------------------------------------------------------------------------------------------ */
+export {
+  type AuditListQuery,
+  CryptoClient,
+  CryptoClientError,
+  type CryptoClientOptions,
+  createCryptoClient,
+  type KeyListQuery,
+} from './client.js';
+export {
+  CryptoEnvelopeError,
+  type CryptoEnvelopeErrorCode,
+  type CryptoEnvelopeOptions,
+  cryptoEnvelope,
+  cryptoFetch,
+  ENVELOPE_FIELD,
+  ENVELOPE_HEADER,
+  ENVELOPE_VERSION,
+  type EnvelopeCipher,
+} from './envelope.js';
+export {
+  type CryptoServerKmsOptions,
+  cryptoServerKms,
+  type KmsAdapterLike,
+  type KmsContextLike,
+} from './kms.js';
+export {
+  type CryptoServerSignerOptions,
+  cryptoServerSigner,
+  type RemoteSigner,
+} from './signer.js';
+export { resolveTenantToken, type TenantToken, type TenantTokenSource } from './token.js';

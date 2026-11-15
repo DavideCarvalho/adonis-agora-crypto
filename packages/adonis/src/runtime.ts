@@ -1,4 +1,4 @@
-import type { CryptoClient } from '@adonis-agora/crypto-client';
+import type { CryptoClient } from '@adonis-agora/crypto-core';
 import type { CryptoService } from './crypto/service.js';
 import type { CryptoApi } from './http/api.js';
 import type { CryptoOperations } from './operations.js';

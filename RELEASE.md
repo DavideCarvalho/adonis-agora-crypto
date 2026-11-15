@@ -5,8 +5,7 @@ to `master` (changesets versioning + npm trusted publishing, no `NPM_TOKEN`).
 
 | Package | What ships |
 | --- | --- |
-| `@adonis-agora/crypto-core` | the wire contract |
-| `@adonis-agora/crypto-client` | the typed client, KMS adapter, envelope fetch |
+| `@adonis-agora/crypto-core` | the wire contract, the typed client, envelope fetch, KMS adapter |
 | `@adonis-agora/crypto` | the server (commands, stubs, console assets) |
 | `@adonis-agora/crypto-dashboard` | the console SPA |
 | `@adonis-agora/crypto-integrations` | 0.x seams for authkit, agent, config, durable, flags, http |

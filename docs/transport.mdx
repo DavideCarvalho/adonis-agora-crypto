@@ -23,7 +23,7 @@ the receiver's needs `crypto:decrypt:svc-flags`. The material stays on the serve
 ## The caller: a fetch that seals
 
 ```ts
-import { cryptoFetch } from '@adonis-agora/crypto-client'
+import { cryptoFetch } from '@adonis-agora/crypto'
 
 const fetch = cryptoFetch({ client: crypto, key: 'svc-flags' })
 

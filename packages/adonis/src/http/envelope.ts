@@ -5,7 +5,7 @@ import {
   ENVELOPE_HEADER,
   ENVELOPE_VERSION,
   type EnvelopeCipher,
-} from '@adonis-agora/crypto-client';
+} from '@adonis-agora/crypto-core';
 import type { HttpContext } from '@adonisjs/core/http';
 import type { CryptoService } from '../crypto/service.js';
 

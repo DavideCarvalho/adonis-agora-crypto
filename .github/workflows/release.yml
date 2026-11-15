@@ -14,8 +14,8 @@ name: Release
 #
 # This repo's packages start at 0.0.0: merging the first PR (which carries a `minor` changeset)
 # publishes 0.1.0. Do not push a changeset to master until npm has a trusted publisher for all six:
-# @adonis-agora/crypto, @adonis-agora/crypto-core, @adonis-agora/crypto-client,
-# @adonis-agora/crypto-dashboard, @adonis-agora/crypto-integrations and @adonis-agora/crypto-react
+# @adonis-agora/crypto, @adonis-agora/crypto-core, @adonis-agora/crypto-dashboard,
+# @adonis-agora/crypto-integrations and @adonis-agora/crypto-react
 # (see RELEASE.md: a brand-new name needs one initial token publish before it can have a trusted
 # publisher, and a new configuration expires after 2 days without a successful publish).
 on:

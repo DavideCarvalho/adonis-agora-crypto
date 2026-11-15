@@ -5,7 +5,7 @@ import {
   createCryptoClient,
   cryptoServerKms,
   cryptoServerSigner,
-} from '@adonis-agora/crypto-client';
+} from '@adonis-agora/crypto-core';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { afterEach, describe, expect, it } from 'vitest';
 import { verify as kitVerify } from '../../src/crypto-kit/index.js';

@@ -1,5 +1,5 @@
 import type { Server } from 'node:http';
-import { createCryptoClient } from '@adonis-agora/crypto-client';
+import { createCryptoClient } from '@adonis-agora/crypto-core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createKeyring, open, seal, sealedStatus } from '../../adonis/src/crypto-kit/index.js';
 import { CryptoApi } from '../../adonis/src/http/api.js';
