@@ -1,0 +1,88 @@
+---
+title: Sharing data with a person
+description: Patient and document sharing where the recipient holds the private key and the server cannot read the payload.
+icon: Users
+---
+
+When the recipient is a person (a doctor, a patient, another clinic), the right model is not a
+shared key: give each person an **X25519 key pair**, keep the private key with them, and seal the
+payload to their public key. The crypto server holds the public half, the audit and the operations —
+never the plaintext after the write, and never the private key.
+
+This is the shape of an `AccessGrant`-style flow: patient shares exams with a doctor, doctor opens
+them, everybody can audit who opened what.
+
+## 1. One key pair per recipient
+
+```sh
+node ace crypto:keys:create doctor-42 --type x25519 --description "Dr. Ana — compartilhamento"
+node ace crypto:keys:public-key doctor-42   # or GET /_crypto/v1/keys/doctor-42/public
+```
+
+```json
+{ "kty": "OKP", "crv": "X25519", "x": "…", "kid": "…", "use": "enc", "alg": "ECDH-ES" }
+```
+
+The public JWK is what the sharing side needs; it is also served as a JWKS
+(`GET /_crypto/v1/keys/doctor-42/jwks`) with every version, so a rotation does not break a share
+made before it.
+
+## 2. Seal the payload to that key
+
+On the side that has the data (the patient's session, or a worker that already holds it):
+
+```ts
+// The crypto kit is copied into every Agora lib and into the app that seals:
+import { sealTo } from '#lib/crypto-kit/index.js'
+
+const shared = sealTo(publicJwk, JSON.stringify({ examId, pdfUrl, notes }), {
+  aad: `grant:${grant.id}`,
+})
+```
+
+`shared` is `agora:pk1:<kid>:<ephemeral>:<iv>:<tag>:<ciphertext>`: an ephemeral X25519 exchange with
+the recipient's public key, HKDF-SHA256, AES-256-GCM. Store that string in the grant row. The
+database, a backup, the crypto server and every log see ciphertext only.
+
+## 3. Only the recipient opens it
+
+```ts
+import { openWith } from '#lib/crypto-kit/index.js'
+
+const payload = JSON.parse(openWith(recipientPrivateJwk, grant.shared, { aad: `grant:${grant.id}` }))
+```
+
+The private key lives where the person is: sealed with their password in the app, in their own
+`x25519` key file, or in the crypto server **only if you accept that the server can read it** (the
+convenience mode: `crypto.decrypt({ key: 'doctor-42', ciphertext })` with a token holding
+`crypto:decrypt:doctor-42`).
+
+| Mode | Who can read | When |
+| --- | --- | --- |
+| **recipient-held** (this page) | only the recipient's device | patient data, LGPD-sensitive shares |
+| **server-held** | anyone with `crypto:decrypt:<recipient>` | audit-friendly internal shares, no device key |
+
+## 4. Audit who opened what
+
+Both modes are audited by the crypto server (recipient-held shares are audited at the app level,
+since the server never sees them). Record the grant, the `kid` used, and the moment the recipient
+opened it:
+
+```ts
+await db.insertInto('access_grant_events').values({
+  grantId: grant.id,
+  kid,
+  openedAt: new Date(),
+  actor: doctor.id,
+})
+```
+
+Revoking is a database action (the grant stops being served); the key can be retired separately
+(`crypto:keys:policy doctor-42 --min-decryption-version N` only affects the server-held mode — a
+recipient-held ciphertext stays openable by whoever has the private key, which is the point).
+
+## Why not just a shared symmetric key?
+
+A symmetric share means the server, every backup and every admin can open it, and revoking means
+re-encrypting everything. Asymmetric shares survive a server compromise: an attacker with the
+database gets ciphertext bound to a key they do not have.

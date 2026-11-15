@@ -10,7 +10,12 @@ import type { AgoraDoctorCheck, AgoraDoctorResult } from './agora_doctor.js';
 const DOCS = 'https://davidecarvalho.github.io/agora/docs/crypto';
 
 function configOf(app: ApplicationService): CryptoConfig | null {
-  return app.config.get<CryptoConfig | undefined>('crypto') ?? null;
+  // `node ace agora:doctor --no-boot` never loads the app's config: every check must skip, not throw.
+  try {
+    return app.config?.get?.<CryptoConfig>('crypto') ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function tenantConfig(app: ApplicationService): TenantTopologyConfig | null {
@@ -20,6 +25,14 @@ function tenantConfig(app: ApplicationService): TenantTopologyConfig | null {
 
 function runtimeOf(): CryptoRuntime | null {
   return hasRuntime() ? getRuntime() : null;
+}
+
+/** `--no-boot` (or a boot that failed): the config is not loaded, so the check has nothing to read. */
+function notBooted(): AgoraDoctorResult {
+  return {
+    status: 'skip',
+    message: 'The app is not booted: run without `--no-boot` to check the crypto configuration.',
+  };
 }
 
 /**
@@ -34,7 +47,8 @@ export const agoraDoctorChecks: AgoraDoctorCheck[] = [
     title: 'Key material keyring',
     run: async (app): Promise<AgoraDoctorResult> => {
       const config = configOf(app);
-      if (!config || config.topology === 'tenant') {
+      if (!config) return notBooted();
+      if (config.topology === 'tenant') {
         return {
           status: 'skip',
           message: 'This process holds no keys: it is a tenant (the server seals them).',
@@ -170,6 +184,7 @@ export const agoraDoctorChecks: AgoraDoctorCheck[] = [
     title: 'Crypto server reachable and token accepted',
     cost: 'deep',
     run: async (app): Promise<AgoraDoctorResult> => {
+      if (configOf(app) === null) return notBooted();
       const config = tenantConfig(app);
       if (!config) {
         return {
@@ -222,7 +237,8 @@ export const agoraDoctorChecks: AgoraDoctorCheck[] = [
     title: 'Console gated in production',
     run: async (app): Promise<AgoraDoctorResult> => {
       const config = configOf(app);
-      if (!config || config.topology === 'tenant') {
+      if (!config) return notBooted();
+      if (config.topology === 'tenant') {
         return { status: 'skip', message: 'No console in this process.' };
       }
       if (config.console === false) {

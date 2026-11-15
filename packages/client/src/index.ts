@@ -41,6 +41,17 @@ export {
   type KeyListQuery,
 } from './client.js';
 export {
+  CryptoEnvelopeError,
+  type CryptoEnvelopeErrorCode,
+  type CryptoEnvelopeOptions,
+  cryptoEnvelope,
+  cryptoFetch,
+  ENVELOPE_FIELD,
+  ENVELOPE_HEADER,
+  ENVELOPE_VERSION,
+  type EnvelopeCipher,
+} from './envelope.js';
+export {
   type CryptoServerKmsOptions,
   cryptoServerKms,
   type KmsAdapterLike,

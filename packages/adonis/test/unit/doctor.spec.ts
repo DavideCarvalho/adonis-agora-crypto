@@ -115,6 +115,24 @@ describe('doctor checks', () => {
     expect((await check('crypto.console').run(gated)).status).toBe('ok');
   });
 
+  it('skips instead of throwing when the app is not booted (--no-boot)', async () => {
+    const notBooted = { config: undefined, inProduction: false } as unknown as ApplicationService;
+    for (const id of ['crypto.keyring', 'crypto.tenant', 'crypto.console']) {
+      const result = await check(id).run(notBooted);
+      expect(result.status).toBe('skip');
+      expect(result.message).toMatch(/not booted/);
+    }
+    const throwing = {
+      config: {
+        get: () => {
+          throw new Error('no config');
+        },
+      },
+      inProduction: true,
+    } as unknown as ApplicationService;
+    expect((await check('crypto.keyring').run(throwing)).status).toBe('skip');
+  });
+
   it('reports an unreachable crypto server from a tenant', async () => {
     const tenant = stubApp(
       defineConfig({

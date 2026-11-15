@@ -57,6 +57,11 @@ const { plaintext } = await crypto.decrypt({ key: 'pii', ciphertext })
 - **Authorization** comes from the verified tenant token: `crypto:encrypt:<key>`,
   `crypto:decrypt:<key>`, `crypto:sign:<key>`, `crypto:keys:manage`, …, with `*` wildcards.
 - **Everything is audited** — who, app, key, version, operation, result — never the plaintext.
+- **Encrypted service-to-service requests**: `cryptoFetch` seals a JSON payload to another app (any
+  client that takes a `fetch`), and a middleware on the receiver opens it into the request body — no
+  shared secret, one key per hop, audited.
+- **Sharing with a person**: an `x25519` key per recipient lets the share be sealed to them
+  (`sealTo`), so the server and its database only ever see ciphertext.
 - **The server is a KMS root** for every Agora lib: `cryptoServerKms({ client, key })` plugs into
   the crypto kit's envelope encryption, so config, authkit and agent keep no key material.
 
