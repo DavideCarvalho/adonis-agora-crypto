@@ -24,6 +24,7 @@ open) exits `1`. Key commands run on a server (control plane or standalone); `cr
 | `crypto:keys:policy <name> [--min-decryption-version N] [--deletion-allowed/--no-deletion-allowed] [--exportable/--no-exportable] [--description]` | change the policy |
 | `crypto:keys:delete <name> [--force]` | destroy the material (needs `deletionAllowed`; asks first) |
 | `crypto:keys:export <name> [--version N] [--force]` | print the private material (needs `exportable`; asks first) |
+| `crypto:keys:public-key <name> [--jwks]` | print the public JWK, or every version as a JWKS |
 | `crypto:keys:reseal [--dry-run] [--all]` | move key material to the active root key |
 
 ```sh

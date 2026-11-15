@@ -1,0 +1,102 @@
+---
+title: Encrypted service-to-service requests
+description: Sealed request and response payloads between Adonis apps, keyed by the crypto server — by config only.
+icon: Network
+---
+
+Two apps that both use the crypto server can encrypt what they say to each other without a shared
+secret in any `.env`: the payload is sealed with a key that only the crypto server (and the apps
+whose tokens hold that key) can open.
+
+The encryption is per *hop*, not per process: an ordinary `fetch` on the caller side and a middleware
+on the receiver side, with the keys managed like any other key.
+
+## One key per hop
+
+```sh
+node ace crypto:keys:create svc-flags --type aes256-gcm
+```
+
+`svc-flags` is not a secret anyone copies around: the caller's token needs `crypto:encrypt:svc-flags`,
+the receiver's needs `crypto:decrypt:svc-flags`. The material stays on the server.
+
+## The caller: a fetch that seals
+
+```ts
+import { cryptoFetch } from '@adonis-agora/crypto-client'
+
+const fetch = cryptoFetch({ client: crypto, key: 'svc-flags' })
+
+// Any client that takes a `fetch` option is encrypted by configuration only:
+const flags = createFlagsClient({ url: env.get('FLAGS_URL'), fetch })
+await flags.evaluate({ rule: 'checkout', userId })
+```
+
+The request goes out as `{ "agoraEnvelope": "agora:ct1:svc-flags:1:…" }` with
+`x-crypto-envelope: v1`; the plaintext never reaches the wire. The response, when it comes back
+sealed, is opened for you — the caller sees the ordinary JSON.
+
+`cryptoFetch` leaves a body that is not JSON (`FormData`, bytes, a stream) untouched, so uploads keep
+working; use it only for JSON APIs.
+
+## The receiver: a middleware that opens
+
+```ts title="start/routes.ts"
+import { cryptoEnvelopeMiddleware } from '@adonis-agora/crypto'
+
+router
+  .post('/internal/flags/evaluate', [FlagsController, 'evaluate'])
+  .use(cryptoEnvelopeMiddleware({ service, partition: 'flags', key: 'svc-flags', required: true }))
+```
+
+The middleware decrypts before the controller runs and **replaces the request body**, so
+`request.body()`, `request.all()` and `request.validateUsing()` read the payload with no controller
+change. It also exposes `ctx.cryptoEnvelope` (`{ key, issuedAt, payload }`).
+
+On a tenant (`topology: 'tenant'`) the middleware takes the client instead of the service:
+
+```ts
+.use(cryptoEnvelopeMiddleware({ client: crypto.client!, key: 'svc-flags' }))
+```
+
+A request without the envelope passes through unless `required: true`. A tampered, stale or foreign
+envelope is a `400` with `{ error, code }` — never a half-decrypted body.
+
+## Answering encrypted
+
+```ts title="app/controllers/flags_controller.ts"
+import { cryptoEnvelopeReply } from '@adonis-agora/crypto'
+
+async evaluate(ctx: HttpContext) {
+  const payload = ctx.cryptoEnvelope!.payload as { rule: string }
+  return cryptoEnvelopeReply(ctx, { enabled: await ruleIsOn(payload.rule) }, {
+    service, partition: 'flags', key: 'svc-flags',
+  })
+}
+```
+
+The caller's `cryptoFetch` opens it; a client that did not ask for an envelope gets JSON as usual.
+
+## What it protects, and what it does not
+
+- **Confidentiality and integrity** of the payload: AES-256-GCM, keyed and audited by the crypto
+  server. A captured body cannot be read or edited.
+- **Freshness**: the envelope carries `iat`; the receiver refuses one older than `maxAgeSec`
+  (default 300) or from the future, so a replay is a `400`.
+- **Context binding**: `aad` (e.g. the tenant or the route direction) is bound into the AAD, so an
+  envelope built for one context cannot be replayed in another.
+- **Not identity**: the *caller* is still whoever the token says. Keep the bearer token (or mTLS) on
+  the request; an envelope protects what is said, not who said it.
+- **The crypto server sees the payload** while sealing/opening — it is the trust root, like a KMS.
+  For data that must stay unreadable to the server itself, use [recipient-held keys](/docs/crypto/sharing).
+
+## Which key for which hop
+
+| Hop | Key | Why |
+| --- | --- | --- |
+| app → flags / durable / config API | `svc-<target>` | one key per hop, both sides audited |
+| internal webhooks between two of your apps | `svc-hooks` | same shape, `required: true` |
+| patient data shared with a person | an `x25519` key per recipient | see [Sharing](/docs/crypto/sharing) |
+
+Rotating the hop key is `node ace crypto:keys:rotate svc-flags`; both sides pick the new version up
+on the next call, and old envelopes keep opening down to `minDecryptionVersion`.

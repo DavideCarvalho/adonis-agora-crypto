@@ -211,6 +211,37 @@ export class CryptoKeysExport extends CryptoCommand {
   }
 }
 
+/** `node ace crypto:keys:public-key <name> [--jwks]` */
+export class CryptoKeysPublicKey extends CryptoCommand {
+  static override commandName = 'crypto:keys:public-key';
+  static override description =
+    'Print an asymmetric key’s public JWK (or every version, as a JWKS)';
+
+  @args.string({ description: 'Key name' })
+  declare name: string;
+
+  @flags.boolean({ description: 'Print every version as a JWKS' })
+  declare jwks: boolean;
+
+  override async run(): Promise<void> {
+    const partition = await this.partition();
+    const service = this.service;
+    if (this.jwks === true) {
+      const result = await service.jwks(
+        { partition, capabilities: ['crypto:keys:read'], actor: 'cli' },
+        this.name,
+      );
+      process.stdout.write(`${JSON.stringify(result)}\n`);
+      return;
+    }
+    const result = await service.publicKey(
+      { partition, capabilities: ['crypto:keys:read'], actor: 'cli' },
+      this.name,
+    );
+    process.stdout.write(`${JSON.stringify(result.jwk)}\n`);
+  }
+}
+
 /**
  * `node ace crypto:keys:reseal [--dry-run] [--all] [--json]` — re-seals every key version with the
  * active root key after a `crypto.keys` rotation or a switch to a KMS. The keys, their versions and

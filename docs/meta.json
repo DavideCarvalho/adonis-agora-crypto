@@ -11,6 +11,8 @@
     "console",
     "commands",
     "mcp",
-    "doctor"
+    "doctor",
+    "transport",
+    "sharing"
   ]
 }
