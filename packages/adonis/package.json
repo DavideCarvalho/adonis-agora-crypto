@@ -79,7 +79,6 @@
     "copy:spa": "mkdir -p dist/assets && rm -rf dist/assets/spa && cp -r ../dashboard/dist/spa dist/assets/spa"
   },
   "dependencies": {
-    "@adonis-agora/crypto-client": "workspace:^",
     "@adonis-agora/crypto-core": "workspace:^",
     "@adonis-agora/filter": "^1.0.0-rc.5"
   },

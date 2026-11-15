@@ -24,7 +24,7 @@ import {
   type VerifyInput,
   type VerifyResult,
   type Whoami,
-} from '@adonis-agora/crypto-core';
+} from './index.js';
 import { resolveTenantToken, type TenantToken, type TenantTokenSource } from './token.js';
 
 export interface CryptoClientOptions {

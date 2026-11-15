@@ -1,4 +1,4 @@
-import { createCryptoClient } from '@adonis-agora/crypto-client';
+import { createCryptoClient } from '@adonis-agora/crypto-core';
 import type { ApplicationService } from '@adonisjs/core/types';
 import { openMaterial } from '../crypto/material.js';
 import { materialStatus } from '../crypto/reseal.js';

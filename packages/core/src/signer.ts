@@ -1,5 +1,5 @@
-import type { PublicJwk } from '@adonis-agora/crypto-core';
 import type { CryptoClient } from './client.js';
+import type { PublicJwk } from './index.js';
 
 export interface CryptoServerSignerOptions {
   /** The crypto server client (URL, partition, token). */

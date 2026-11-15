@@ -4,7 +4,7 @@ import type { CryptoStore } from './store/store.js';
 
 export type { CryptoKeyringConfig } from './crypto/keyring.js';
 
-import type { TenantTokenSource } from '@adonis-agora/crypto-client';
+import type { TenantTokenSource } from '@adonis-agora/crypto-core';
 import type { CryptoKeyringConfig } from './crypto/keyring.js';
 import { LucidStore } from './store/lucid_store.js';
 import { MemoryStore } from './store/memory_store.js';

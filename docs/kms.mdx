@@ -9,7 +9,7 @@ data key wrapped by a `KmsAdapter`. Point that adapter at this server and no lib
 any more — the server is the root.
 
 ```ts
-import { cryptoServerKms, createCryptoClient } from '@adonis-agora/crypto-client'
+import { createCryptoClient, cryptoServerKms } from '@adonis-agora/crypto'
 import { createKeyring } from './crypto-kit/index.js'
 
 const client = createCryptoClient({
@@ -61,7 +61,7 @@ When a signature has to come from a key the app must not hold (a webhook signing
 token), use the remote signer:
 
 ```ts
-import { cryptoServerSigner } from '@adonis-agora/crypto-client'
+import { cryptoServerSigner } from '@adonis-agora/crypto'
 
 const signer = cryptoServerSigner({ client, key: 'webhooks' })
 const signature = await signer.sign(body)          // agora:sig1:<kid>:<signature>

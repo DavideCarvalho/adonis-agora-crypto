@@ -1,5 +1,5 @@
 import type { AgoraDoctorCheck } from '@adonis-agora/crypto';
-import type { KmsAdapterLike } from '@adonis-agora/crypto-client';
+import type { KmsAdapterLike } from '@adonis-agora/crypto-core';
 import { ROOT_KEYS } from './keys.js';
 import { type KmsCheckOptions, type KmsIntegrationOptions, kmsDoctorCheck, kmsFor } from './kms.js';
 import { cipherFor } from './source.js';

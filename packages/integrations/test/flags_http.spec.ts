@@ -3,7 +3,7 @@ import {
   ENVELOPE_FIELD,
   ENVELOPE_HEADER,
   type EnvelopeCipher,
-} from '@adonis-agora/crypto-client';
+} from '@adonis-agora/crypto-core';
 import { describe, expect, it } from 'vitest';
 import { memoryCrypto } from '../../adonis/src/testing/index.js';
 import { flagsEnvelope, flagsEnvelopeFetch } from '../src/flags.js';

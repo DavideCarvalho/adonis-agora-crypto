@@ -1,4 +1,4 @@
-import { cryptoFetch } from '@adonis-agora/crypto-client';
+import { cryptoFetch } from '@adonis-agora/crypto-core';
 import { type CipherSource, cipherFor } from './source.js';
 
 /** The key a flags app uses for its event hop by default. */

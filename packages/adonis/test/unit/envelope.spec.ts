@@ -1,5 +1,5 @@
 import type { Server } from 'node:http';
-import { cryptoEnvelope, cryptoFetch, ENVELOPE_FIELD } from '@adonis-agora/crypto-client';
+import { cryptoEnvelope, cryptoFetch, ENVELOPE_FIELD } from '@adonis-agora/crypto-core';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   cryptoEnvelopeMiddleware,

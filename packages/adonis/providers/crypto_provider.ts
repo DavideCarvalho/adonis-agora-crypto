@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url';
-import { createCryptoClient } from '@adonis-agora/crypto-client';
+import { createCryptoClient } from '@adonis-agora/crypto-core';
 import type { HttpContext } from '@adonisjs/core/http';
 import type { ApplicationService } from '@adonisjs/core/types';
 import { createCryptoKeyring, type EncrypterLike, type Keyring } from '../src/crypto/keyring.js';

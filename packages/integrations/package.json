@@ -75,7 +75,6 @@
   },
   "dependencies": {
     "@adonis-agora/crypto": "workspace:^",
-    "@adonis-agora/crypto-client": "workspace:^",
     "@adonis-agora/crypto-core": "workspace:^"
   },
   "peerDependencies": {

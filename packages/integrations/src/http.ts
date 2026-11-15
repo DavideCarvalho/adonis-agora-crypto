@@ -26,10 +26,10 @@ export {
   ENVELOPE_HEADER,
   ENVELOPE_VERSION,
   type EnvelopeCipher,
-} from '@adonis-agora/crypto-client';
+} from '@adonis-agora/crypto-core';
 export { type CipherSource, cipherFor } from './source.js';
 
-import { cryptoFetch } from '@adonis-agora/crypto-client';
+import { cryptoFetch } from '@adonis-agora/crypto-core';
 import { type CipherSource, cipherFor } from './source.js';
 
 export interface HttpEnvelopeOptions {
