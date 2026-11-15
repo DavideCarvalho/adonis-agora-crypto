@@ -366,6 +366,24 @@ export class LucidStore implements CryptoStore {
     );
   }
 
+  async replaceMaterial(
+    partition: string,
+    name: string,
+    version: number,
+    sealed: string,
+    kid?: string,
+  ): Promise<void> {
+    await query(
+      this.db,
+      'UPDATE crypto_key_versions SET material = ?' +
+        (kid !== undefined ? ', kid = ?' : '') +
+        ' WHERE app = ? AND name = ? AND version = ?',
+      kid !== undefined
+        ? [sealed, kid, partition, name, version]
+        : [sealed, partition, name, version],
+    );
+  }
+
   async deleteKey(partition: string, name: string, at: string, by: string): Promise<void> {
     await this.db.transaction(async (trx) => {
       const current = await query<KeyRow>(

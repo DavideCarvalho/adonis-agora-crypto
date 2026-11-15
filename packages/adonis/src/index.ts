@@ -66,6 +66,30 @@ export {
   CryptoService,
   type CryptoServiceOptions,
 } from './crypto/service.js';
+export { type ConsoleActor, consoleActor } from './dashboard/actor.js';
+export {
+  CONSOLE_ID,
+  CryptoConsole,
+  type CryptoConsoleOptions,
+  cryptoConsoleSearchFor,
+} from './dashboard/console.js';
+export {
+  anyAuthorize,
+  authorizeByToken,
+  type ConsoleAuthorize,
+  type ConsoleAuthorizeDecision,
+  type ConsoleAuthorizeResult,
+  type ConsoleAuthorizer,
+  type ConsoleAuthorizerClass,
+  normalizeConsoleAuthorizeResult,
+  resolveConsoleAuthorize,
+} from './dashboard/console_authorize.js';
+export {
+  type CryptoDashboardConfig,
+  dashboardPath,
+  type ResolvedConsoleConfig,
+  resolveDashboardConfig,
+} from './dashboard/define_config.js';
 export {
   type ControlPlaneConfig,
   type CryptoConfig,
@@ -76,6 +100,23 @@ export {
   stores,
   type TenantTopologyConfig,
 } from './define_config.js';
+export {
+  cryptoDevTools,
+  DEV_TOOLS_BINDING,
+  type DevTool,
+  type DevToolCall,
+  type DevToolsDecision,
+  type DevToolsHub,
+  type DevToolsLib,
+  registerCryptoDevTools,
+} from './dev_tools.js';
+export type {
+  AgoraDoctorCheck,
+  AgoraDoctorReport,
+  AgoraDoctorResult,
+  AgoraDoctorStatus,
+} from './doctor/agora_doctor.js';
+export { agoraDoctorChecks } from './doctor/checks.js';
 export { CryptoApi, type CryptoApiOptions, cryptoCsrfExceptions } from './http/api.js';
 export type { CryptoOperations } from './operations.js';
 export { localOperations, remoteOperations } from './operations.js';

@@ -121,6 +121,24 @@ export class MemoryStore implements CryptoStore {
     this.#keys.set(id, next);
   }
 
+  async replaceMaterial(
+    partition: string,
+    name: string,
+    version: number,
+    sealed: string,
+    kid?: string,
+  ): Promise<void> {
+    const id = slot(partition, name);
+    const list = this.#versions.get(id);
+    const found = list?.find((entry) => entry.version === version);
+    if (!list || !found) throw new Error(`crypto: no version ${version} of "${name}"`);
+    const next = { ...found, sealed, ...(kid !== undefined ? { kid } : {}) };
+    this.#versions.set(
+      id,
+      list.map((entry) => (entry.version === version ? next : entry)),
+    );
+  }
+
   async deleteKey(partition: string, name: string, at: string, by: string): Promise<void> {
     const id = slot(partition, name);
     const record = this.#keys.get(id);

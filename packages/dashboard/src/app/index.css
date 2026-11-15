@@ -1,0 +1,31 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+/* The Agora console kit: tokens (dark + light), shadcn variable mapping, Tailwind theme. */
+@import "../agora-kit/tokens.css";
+
+/* Tailwind 4 scans the package directory by default; pin the sources explicitly. */
+@source "../../index.html";
+@source "./";
+@source "../agora-kit";
+
+/* Tailwind 4's preflight resets buttons to `cursor: default`; keep the pointer. */
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
+/* Version and result states carry meaning beyond colour: the badges say the words. */
+.s-latest {
+  color: var(--agora-good);
+}
+.s-retired {
+  color: var(--agora-muted);
+}
+.s-denied {
+  color: var(--agora-warn);
+}
+.s-error {
+  color: var(--agora-bad);
+}
