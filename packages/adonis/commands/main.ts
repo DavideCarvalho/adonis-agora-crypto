@@ -1,5 +1,6 @@
 import { ListLoader } from '@adonisjs/core/ace';
 import AgoraDoctor from './agora_doctor.js';
+import CryptoDoctor from './doctor.js';
 import {
   CryptoKeysCreate,
   CryptoKeysDelete,
@@ -30,6 +31,7 @@ const loader = new ListLoader([
   CryptoDecrypt,
   CryptoAuditCommand,
   AgoraDoctor,
+  CryptoDoctor,
 ]);
 
 export const getMetaData = loader.getMetaData.bind(loader);
