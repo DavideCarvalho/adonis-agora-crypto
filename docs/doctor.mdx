@@ -1,0 +1,40 @@
+---
+title: Doctor
+description: The crypto checks agora:doctor runs, and what each one means.
+icon: Stethoscope
+---
+
+```sh
+node ace agora:doctor --lib crypto
+node ace agora:doctor --lib crypto --deep
+node ace agora:doctor --lib crypto --json
+```
+
+Every `@adonis-agora` lib registers its checks on the same runner; `crypto:doctor` is the same
+command pre-filtered to this lib. Exit code `0` when nothing is an error, `1` otherwise.
+
+| Check | Cost | What it looks at |
+| --- | --- | --- |
+| `crypto.keyring` | cheap | Is there a root that seals key material: an envelope KMS, `crypto.keys`, or the app encryption service (the default)? |
+| `crypto.database` | deep | Reads the store: how many keys, in how many apps, how many deleted. |
+| `crypto.key-material` | deep | Opens **every** key version with the configured root; reports a `retired` root as a warning and an unopenable version as an error. |
+| `crypto.tenant` | deep | On a tenant: is the server reachable and is the token accepted, with which capabilities? |
+| `crypto.console` | cheap | Is the console gated? Without `console.authorize` it warns outside production and errors in production, where it denies every request. |
+
+## What the messages mean
+
+- **“N of M key version(s) do not open”** — the root that sealed them is gone (a different
+  `APP_KEY`, a `crypto.keys` entry removed, a KMS key deleted). Nothing in the server can recover
+  them: restore the root. This is the check that makes a wrong deploy of `APP_KEY` loud before a
+  customer finds it.
+- **“sealed with a retired root key”** — a rotation that nobody re-sealed yet. The server still
+  works while both roots are configured; run `node ace crypto:keys:reseal` to finish the job, then
+  drop the old root.
+- **“the console has no `authorize`”** — set `console.authorize`; until then it is open outside
+  production and closed in production.
+- **“the crypto server refused the tenant token (401)”** — check `CRYPTO_TOKEN` / the authkit client
+  credentials, and that the client is registered for `urn:agora:crypto`.
+- **“the token was accepted but holds no capability (403)”** — grant the capabilities the app needs
+  (`crypto:encrypt:<key>`, …).
+
+Docs for each check link to the page that explains the fix.

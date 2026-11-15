@@ -35,6 +35,6 @@ export async function configure(command: Configure) {
     'A control plane must exempt its tenant API from Shield CSRF: exceptRoutes: (ctx) => cryptoCsrfExceptions(ctx.request.url()), imported from @adonis-agora/crypto.',
   );
   command.logger.info(
-    'Key material is sealed with the app’s encryption service (config/encryption.ts) by default: rotate there and run `node ace crypto:crypto:reseal --all`.',
+    'Key material is sealed with the app’s encryption service (config/encryption.ts) by default. After rotating the root, run `node ace crypto:keys:reseal` to move the stored material.',
   );
 }

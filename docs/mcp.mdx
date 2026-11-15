@@ -1,0 +1,36 @@
+---
+title: MCP dev tools
+description: What an agent may read about the keys — metadata and the audit trail, never an operation.
+icon: Bot
+---
+
+When `@adonis-agora/agent` is installed, every Agora console registers its **dev tools** on the
+`agora.devTools` hub. The crypto console registers four, all `read`:
+
+| Tool | Returns |
+| --- | --- |
+| `crypto_list_keys` | the app's keys: name, type, latest version, decryption floor, policy flags, description; filters `search`, paged |
+| `crypto_get_key` | one key: policy and every version with `status`, `kid` and public JWK |
+| `crypto_list_audit` | the trail: who, operation, key, version, result, error; filters `key`, `operation`, `result`, `actor`, paged |
+| `crypto_overview` | keys, versions, operations in the last 24h, denied and failed |
+
+**There is no encrypt, decrypt, sign or export tool, and there will not be one by default.** An agent
+can see that a key exists, how it is versioned and who used it; it cannot make it do anything.
+Operations belong in the app's code, with a token whose capabilities you chose.
+
+```json
+{ "app": "streaming", "search": "media", "limit": 10 }
+```
+
+Reads act with `crypto:keys:read` on the named app, and the caller is recorded as `mcp:<caller id>`
+in the audit trail, so "which agent read this" is answerable.
+
+## Requirements
+
+- the crypto console is mounted (`console: false` turns the dev tools off, the hub rule every Agora
+  lib follows);
+- the console's `authorize` hook allows the caller — the same gate as the console's pages;
+- the agent's dev endpoint is enabled in that app (`@adonis-agora/agent`).
+
+Remote agents reach the same tools through the agent's own OIDC-protected MCP endpoint; nothing here
+is bound to a local request.

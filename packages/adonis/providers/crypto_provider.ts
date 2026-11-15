@@ -1,7 +1,19 @@
+import { fileURLToPath } from 'node:url';
 import { createCryptoClient } from '@adonis-agora/crypto-client';
+import type { HttpContext } from '@adonisjs/core/http';
 import type { ApplicationService } from '@adonisjs/core/types';
 import { createCryptoKeyring, type EncrypterLike, type Keyring } from '../src/crypto/keyring.js';
 import { CryptoService } from '../src/crypto/service.js';
+import { CryptoConsole, cryptoConsoleSearchFor } from '../src/dashboard/console.js';
+import {
+  type ConsoleAuthorizeDecision,
+  resolveConsoleAuthorize,
+} from '../src/dashboard/console_authorize.js';
+import { readAgoraConsoles, registerAgoraConsole } from '../src/dashboard/console_switcher.js';
+import {
+  type ResolvedConsoleConfig,
+  resolveDashboardConfig,
+} from '../src/dashboard/define_config.js';
 import {
   type ControlPlaneConfig,
   type CryptoConfig,
@@ -11,6 +23,9 @@ import {
   stores,
   type TenantTopologyConfig,
 } from '../src/define_config.js';
+import { registerCryptoDevTools } from '../src/dev_tools.js';
+import { registerDoctorChecks } from '../src/doctor/agora_doctor.js';
+import { agoraDoctorChecks } from '../src/doctor/checks.js';
 import { CryptoApi } from '../src/http/api.js';
 import { localOperations, remoteOperations } from '../src/operations.js';
 import type { CryptoRuntime } from '../src/runtime.js';
@@ -28,6 +43,11 @@ declare module '@adonisjs/core/types' {
 /** This console's id in the `'agora.consoles'` registry. */
 export const CONSOLE_ID = 'crypto';
 
+/** The built console (`dist/assets/spa`), resolved from `dist/providers/crypto_provider.js`. */
+function spaDirectory(): string {
+  return fileURLToPath(new URL('../assets/spa/', import.meta.url));
+}
+
 /**
  * Builds the crypto runtime from `config/crypto.ts` and publishes it as `'agora.crypto'` and as
  * `services/main`.
@@ -41,6 +61,7 @@ export const CONSOLE_ID = 'crypto';
 export default class CryptoProvider {
   #runtime: CryptoRuntime | undefined;
   #building: Promise<CryptoRuntime> | undefined;
+  #consoleConfig: ResolvedConsoleConfig | undefined;
 
   constructor(protected app: ApplicationService) {}
 
@@ -101,6 +122,7 @@ export default class CryptoProvider {
       partition: config.tenant.partition,
       client,
       operations,
+      operationsFor: () => operations,
       status: () => ({
         topology: 'tenant',
         partition: config.tenant.partition,
@@ -137,6 +159,7 @@ export default class CryptoProvider {
     };
     const store: CryptoStore = await (config.store ?? stores.lucid())(factoryContext);
     await store.setup?.();
+    this.#consoleConfig = resolveDashboardConfig(config.console);
     const service = new CryptoService({
       store,
       keyring,
@@ -166,6 +189,8 @@ export default class CryptoProvider {
       service,
       ...(api !== undefined ? { api } : {}),
       operations,
+      operationsFor: (app, actor) =>
+        localOperations(service, { partition: app, capabilities: ['crypto:*'], actor }),
       status: () => ({
         topology: config.topology ?? 'standalone',
         partition,
@@ -237,8 +262,101 @@ export default class CryptoProvider {
     }
   }
 
+  /** The console's resolved gate, also used by the switcher and the dev tools. */
+  async #authorize(ctx: HttpContext): Promise<ConsoleAuthorizeDecision> {
+    const configured = this.#consoleConfig?.authorize;
+    if (configured) return resolveConsoleAuthorize(configured)(ctx);
+    return this.app.inProduction
+      ? { allowed: false, status: 403, reason: 'forbidden' }
+      : { allowed: true };
+  }
+
+  async #mountConsole(logger: {
+    warn(message: string): void;
+    info(message: string): void;
+  }): Promise<void> {
+    const config = this.#consoleConfig;
+    const service = this.#runtime?.service;
+    if (!config?.enabled || !service) return;
+    const registry = await readAgoraConsoles(this.app.container);
+    const console = new CryptoConsole({
+      service,
+      config,
+      spaDir: spaDirectory(),
+      ...(this.#runtime?.partition ? { defaultPartition: this.#runtime.partition } : {}),
+      inProduction: this.app.inProduction,
+      ...(registry ? { registry } : {}),
+      topology: this.#runtime?.topology === 'standalone' ? 'standalone' : 'control-plane',
+      logger,
+    });
+    if (!config.authorize) {
+      logger.warn(
+        '[@adonis-agora/crypto] the console has no `authorize`: it is open outside production and denies every request in production. Set `console.authorize` in config/crypto.ts.',
+      );
+    }
+    await this.app.booted(async () => {
+      const router = await this.app.container.make('router');
+      console.register(router as never);
+    });
+    logger.info(
+      `[@adonis-agora/crypto] console at ${config.path === '' ? '/' : config.path} (API ${config.api})`,
+    );
+  }
+
+  async #registerConsole(logger: { warn(message: string): void }): Promise<void> {
+    const config = this.#consoleConfig;
+    const service = this.#runtime?.service;
+    if (!config?.enabled || !service) return;
+    const path = config.path === '' ? '/' : config.path;
+    await registerAgoraConsole(
+      this.app.container,
+      {
+        id: CONSOLE_ID,
+        title: 'Crypto keys',
+        package: '@adonis-agora/crypto',
+        icon: 'generic',
+        path,
+        order: 66,
+        authorize: async (ctx) => {
+          const decision = await this.#authorize(ctx);
+          if (decision.allowed) return { allowed: true };
+          if (decision.status === 302) {
+            return { allowed: false, redirectTo: decision.redirectTo };
+          }
+          return { allowed: false, reason: decision.reason };
+        },
+        search: cryptoConsoleSearchFor(service, config.path),
+      },
+      logger,
+    );
+  }
+
+  async #registerDevTools(): Promise<void> {
+    const service = this.#runtime?.service;
+    if (!service) return;
+    await registerCryptoDevTools(this.app.container, {
+      service,
+      authorize: async (ctx) => {
+        const decision = await this.#authorize(ctx);
+        if (decision.allowed) return { allowed: true };
+        if (decision.status === 302) {
+          return { allowed: false, reason: 'forbidden', redirectTo: decision.redirectTo };
+        }
+        return { allowed: false, reason: decision.reason };
+      },
+    });
+  }
+
   async boot(): Promise<void> {
     const runtime = await this.#build();
+    const logger = await this.#logger();
+    await registerDoctorChecks(this.app.container, agoraDoctorChecks);
+    if (runtime.topology !== 'tenant') {
+      await this.#registerConsole(logger);
+      await this.#mountConsole(logger);
+      // A console that is disabled exposes no dev tools either (the hub rule every Agora lib follows).
+      if (this.#consoleConfig?.enabled) await this.#registerDevTools();
+    }
     await this.app.booted(async () => {
       if (!runtime.api) return;
       const router = await this.app.container.make('router');
@@ -250,5 +368,6 @@ export default class CryptoProvider {
     setRuntime(undefined);
     this.#runtime = undefined;
     this.#building = undefined;
+    this.#consoleConfig = undefined;
   }
 }

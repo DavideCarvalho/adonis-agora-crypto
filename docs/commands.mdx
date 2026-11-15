@@ -1,0 +1,82 @@
+---
+title: Commands
+description: Every console action from node ace — keys, policies, rotate, encrypt/decrypt, audit, reseal.
+icon: Terminal
+---
+
+```sh
+node ace list crypto
+```
+
+Every command records `cli:<os user>` as the audit actor, prints a table by default and one JSON
+object with `--json`. A failure (a refused capability, an unknown key, a ciphertext that does not
+open) exits `1`. Key commands run on a server (control plane or standalone); `crypto:encrypt` and
+`crypto:decrypt` also run on a tenant, where they go to the server over HTTP.
+
+## Keys
+
+| Command | What it does |
+| --- | --- |
+| `crypto:keys:list [--search] [--application]` | the app's keys, metadata only |
+| `crypto:keys:show <name>` | one key: type, policy, every version |
+| `crypto:keys:create <name> --type <type> [--description] [--deletion-allowed] [--exportable]` | create version 1 |
+| `crypto:keys:rotate <name>` | add a version; old data keeps opening |
+| `crypto:keys:policy <name> [--min-decryption-version N] [--deletion-allowed/--no-deletion-allowed] [--exportable/--no-exportable] [--description]` | change the policy |
+| `crypto:keys:delete <name> [--force]` | destroy the material (needs `deletionAllowed`; asks first) |
+| `crypto:keys:export <name> [--version N] [--force]` | print the private material (needs `exportable`; asks first) |
+| `crypto:keys:reseal [--dry-run] [--all]` | move key material to the active root key |
+
+```sh
+node ace crypto:keys:create media --type aes256-gcm --description "media URLs"
+node ace crypto:keys:rotate media
+node ace crypto:keys:policy media --min-decryption-version 2
+node ace crypto:keys:reseal --dry-run
+```
+
+`--application` names the app (partition) on a control plane; on a standalone app it defaults to the
+app's own name.
+
+## Operations
+
+```sh
+node ace crypto:encrypt --key media --value 'https://cdn/x.mp4' --aad media:42
+# agora:ct1:media:1:…
+
+node ace crypto:decrypt --key media --value 'agora:ct1:media:1:…' --aad media:42
+# https://cdn/x.mp4
+```
+
+For a secret, prefer a file or stdin over `--value`, which lands in the shell history:
+
+```sh
+node ace crypto:encrypt --key media --stdin < secret.txt
+```
+
+## Audit
+
+```sh
+node ace crypto:audit --application streaming --operation decrypt --result denied --limit 20
+node ace crypto:audit --json | jq '.data[0]'
+```
+
+## Doctor
+
+```sh
+node ace agora:doctor --lib crypto --deep
+node ace crypto:doctor        # the same, pre-filtered to this lib
+```
+
+See [Doctor](/docs/crypto/doctor).
+
+## Resealing after a root rotation
+
+Rotating the root keyring (`crypto.keys` with a new first key, or switching to a KMS) leaves the key
+material sealed under the old root. The server keeps working while both are configured; then:
+
+```sh
+node ace crypto:keys:reseal --dry-run     # how many versions would move
+node ace crypto:keys:reseal               # move them
+```
+
+Keys, versions, public halves and every ciphertext stay the same — only the envelope around the
+private material changes.

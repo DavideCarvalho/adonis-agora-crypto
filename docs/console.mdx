@@ -1,0 +1,65 @@
+---
+title: Console
+description: Keys, versions, policy and the audit trail in the browser — metadata only.
+icon: MonitorSmartphone
+---
+
+Every server and standalone app mounts a console at the same path as its tenant API (`/_crypto`):
+
+```
+https://crypto.example.com/_crypto          # the SPA
+https://crypto.example.com/_crypto/api/...  # its JSON API
+```
+
+The console shows **metadata only**: key names and types, versions with their status, `kid` and
+public JWK, the policy, and the audit trail. It cannot reveal key material or plaintext, and there is
+no export button — exporting is a CLI decision that a person makes deliberately.
+
+## What is on each page
+
+- **Overview** — keys, versions, operations in the last 24h, denied and failed calls, the most recent
+  operations, the key types, and the capability vocabulary.
+- **Keys** — one row per key with its type, latest version, decryption floor and policy badges.
+  Create a key (name, type, description, allow-deletion, allow-export), rotate it, or delete it when
+  the key allows deletion.
+- **Key** — metadata, the policy editor (decryption floor, deletion, export, description), every
+  version with its status, and the public keys of an asymmetric key.
+- **Audit** — the trail, filterable by key, operation and result.
+
+The app picker in the topbar switches between the apps (partitions) the server holds.
+
+## Gating it
+
+```ts title="config/crypto.ts"
+export default defineConfig({
+  topology: 'control-plane',
+  verifyTenant,
+  console: {
+    // Any Agora authorize shape: a function, a class, or a lazy import.
+    authorize: authkitDashboardAuthorize({ issuer: env.get('AUTHKIT_ISSUER') }),
+    // viewer: (ctx) => ({ label: … })   — the sidebar footer
+    // signOut: '/account/logout'        — defaults to authkit's announcement
+    // accessDenied: { brand: 'Crypto' } — the refusal page
+    // apps: ['streaming']              — serve only these
+  },
+})
+```
+
+Without `authorize`, the console is open outside production and denies every request in production;
+`node ace agora:doctor --lib crypto` says so. The console is also what registers the
+**console switcher** entry and the **MCP dev tools**; disable it (`console: false`) and neither is
+offered.
+
+## Behind a path other than `/_crypto`
+
+```ts
+export default defineConfig({
+  topology: 'control-plane',
+  verifyTenant,
+  prefix: '/crypto',                       // the tenant API
+  console: { path: '/crypto/admin' },      // the console, and its API at /crypto/admin/api
+})
+```
+
+The SPA is served with the deployment's data block injected into `index.html`, so the same build works
+mounted anywhere.

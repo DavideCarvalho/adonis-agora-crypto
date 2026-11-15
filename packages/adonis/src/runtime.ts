@@ -30,5 +30,10 @@ export interface CryptoRuntime {
   client?: CryptoClient;
   /** The same calls everywhere: in-process on a server, over HTTP on a tenant. */
   operations: CryptoOperations;
+  /**
+   * The operations of one app, as one actor: a server builds them for the named partition (the
+   * console, the CLI), a tenant ignores both (its token decides). Used by the ops commands.
+   */
+  operationsFor(partition: string, actor: string): CryptoOperations;
   status(): CryptoStatus;
 }
