@@ -106,6 +106,9 @@ export class CryptoDecrypt extends CryptoCommand {
   @flags.string({ description: 'The aad used at encrypt time' })
   declare aad: string;
 
+  @flags.string({ description: 'Who this open is for, recorded in the audit trail (user:42)' })
+  declare context: string;
+
   override async run(): Promise<void> {
     let ciphertext = this.value;
     if (this.stdin === true) {
@@ -127,6 +130,7 @@ export class CryptoDecrypt extends CryptoCommand {
         key: this.key,
         ciphertext,
         ...(this.aad !== undefined ? { aad: this.aad } : {}),
+        ...(this.context !== undefined ? { context: this.context } : {}),
       });
       if (this.json) process.stdout.write(`${JSON.stringify(result)}\n`);
       else process.stdout.write(`${result.plaintext}\n`);

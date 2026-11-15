@@ -13,8 +13,11 @@ name: Release
 # No "version packages" PR to merge: merging a PR that carries a changeset IS the release.
 #
 # This repo's packages start at 0.0.0: merging the first PR (which carries a `minor` changeset)
-# publishes 0.1.0. Do not push a changeset to master until npm has a trusted publisher for
-# @adonis-agora/crypto, @adonis-agora/crypto-core and @adonis-agora/crypto-dashboard.
+# publishes 0.1.0. Do not push a changeset to master until npm has a trusted publisher for all six:
+# @adonis-agora/crypto, @adonis-agora/crypto-core, @adonis-agora/crypto-client,
+# @adonis-agora/crypto-dashboard, @adonis-agora/crypto-integrations and @adonis-agora/crypto-react
+# (see RELEASE.md: a brand-new name needs one initial token publish before it can have a trusted
+# publisher, and a new configuration expires after 2 days without a successful publish).
 on:
   push:
     branches: [master]
@@ -195,6 +198,11 @@ jobs:
           publish-script: pnpm release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Set but EMPTY, on purpose: changesets treats a missing token as "nothing to authenticate
+          # with" and skips the OIDC exchange entirely. An empty variable makes npm fall back to the
+          # GitHub OIDC token (id-token: write above), which is what trusted publishing needs. The
+          # same fix was needed in the config repo's release.
+          NODE_AUTH_TOKEN: ''
 
   snapshot:
     name: Publish beta snapshot to npm
@@ -231,3 +239,5 @@ jobs:
 
       - name: Publish beta snapshot
         run: pnpm changeset publish --tag beta --no-git-tag
+        env:
+          NODE_AUTH_TOKEN: ''

@@ -22,8 +22,18 @@ export class CryptoEnvelopeError extends Error {
 
 /** What an envelope needs from a crypto server: the two calls, nothing else. */
 export interface EnvelopeCipher {
-  encrypt(input: { key: string; plaintext: string; aad?: string }): Promise<{ ciphertext: string }>;
-  decrypt(input: { key: string; ciphertext: string; aad?: string }): Promise<{ plaintext: string }>;
+  encrypt(input: {
+    key: string;
+    plaintext: string;
+    aad?: string;
+    context?: string;
+  }): Promise<{ ciphertext: string }>;
+  decrypt(input: {
+    key: string;
+    ciphertext: string;
+    aad?: string;
+    context?: string;
+  }): Promise<{ plaintext: string }>;
 }
 
 export interface CryptoEnvelopeOptions {

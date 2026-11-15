@@ -100,6 +100,7 @@ export interface AuditListQuery {
 }
 
 const MAX_AAD = 512;
+const MAX_CONTEXT = 200;
 const MAX_PLAINTEXT = 64 * 1024;
 
 function assertString(value: unknown, name: string): string {
@@ -113,6 +114,23 @@ function assertAad(value: unknown): string | undefined {
   if (typeof value !== 'string') throw new CryptoError('invalid', 'crypto: aad must be a string');
   if (value.length > MAX_AAD) {
     throw new CryptoError('invalid', `crypto: aad is longer than ${MAX_AAD} characters`);
+  }
+  return value;
+}
+
+/**
+ * The `context` an operation carries into the audit trail (`user:42`, `grant:7`, `boot`). It is not
+ * encrypted: it must never be the plaintext or a secret.
+ */
+function assertContext(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string')
+    throw new CryptoError('invalid', 'crypto: context must be a string');
+  if (value.length > MAX_CONTEXT) {
+    throw new CryptoError('invalid', `crypto: context is longer than ${MAX_CONTEXT} characters`);
+  }
+  if (/\p{Cc}/u.test(value)) {
+    throw new CryptoError('invalid', 'crypto: context must not contain control characters');
   }
   return value;
 }
@@ -206,6 +224,7 @@ export class CryptoService {
     key: string | undefined,
     required: string | readonly string[],
     run: () => Promise<{ result: T; version?: number }>,
+    metadata?: Record<string, string | number | boolean>,
   ): Promise<T> {
     const capabilities = typeof required === 'string' ? [required] : required;
     const missing = capabilities.find(
@@ -218,6 +237,7 @@ export class CryptoService {
           key,
           result: 'denied',
           error: `missing capability ${missing}`,
+          ...(metadata !== undefined ? { metadata } : {}),
         });
       }
       throw new CryptoError('forbidden', `crypto: the token lacks ${missing}`);
@@ -225,7 +245,13 @@ export class CryptoService {
     try {
       const { result, version } = await run();
       if (operation !== null) {
-        await this.#audit(principal, { operation, key, version, result: 'ok' });
+        await this.#audit(principal, {
+          operation,
+          key,
+          version,
+          result: 'ok',
+          ...(metadata !== undefined ? { metadata } : {}),
+        });
       }
       return result;
     } catch (error) {
@@ -235,6 +261,7 @@ export class CryptoService {
           key,
           result: 'error',
           error: error instanceof Error ? error.message : String(error),
+          ...(metadata !== undefined ? { metadata } : {}),
         });
       }
       throw error;
@@ -697,18 +724,27 @@ export class CryptoService {
   async decrypt(principal: CryptoPrincipal, input: DecryptInput): Promise<DecryptResult> {
     this.#assertPartition(principal);
     const name = assertString(input?.key, 'key');
-    return this.#perform(principal, 'decrypt', name, cryptoScope('decrypt', name), async () => {
-      const opened = await this.#open(principal, { ...input, key: name });
-      return {
-        result: { key: name, version: opened.version.version, plaintext: opened.plaintext },
-        version: opened.version.version,
-      };
-    });
+    const context = assertContext(input.context);
+    return this.#perform(
+      principal,
+      'decrypt',
+      name,
+      cryptoScope('decrypt', name),
+      async () => {
+        const opened = await this.#open(principal, { ...input, key: name });
+        return {
+          result: { key: name, version: opened.version.version, plaintext: opened.plaintext },
+          version: opened.version.version,
+        };
+      },
+      context !== undefined ? { context } : undefined,
+    );
   }
 
   async rewrap(principal: CryptoPrincipal, input: RewrapInput): Promise<RewrapResult> {
     this.#assertPartition(principal);
     const name = assertString(input?.key, 'key');
+    const context = assertContext(input.context);
     return this.#perform(
       principal,
       'rewrap',
@@ -740,12 +776,14 @@ export class CryptoService {
           version: latest.version,
         };
       },
+      context !== undefined ? { context } : undefined,
     );
   }
 
   async generateDataKey(principal: CryptoPrincipal, input: DataKeyInput): Promise<DataKeyResult> {
     this.#assertPartition(principal);
     const name = assertString(input?.key, 'key');
+    const context = assertContext(input.context);
     return this.#perform(
       principal,
       'datakey',
@@ -779,6 +817,7 @@ export class CryptoService {
           version: chosen.version,
         };
       },
+      context !== undefined ? { context } : undefined,
     );
   }
 
