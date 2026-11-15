@@ -449,3 +449,24 @@ export {
   type RemoteSigner,
 } from './signer.js';
 export { resolveTenantToken, type TenantToken, type TenantTokenSource } from './token.js';
+
+/* The tenant ↔ control-plane transport contract (the call channel). */
+export {
+  assertTransportSize,
+  type CryptoTransport,
+  createDedupe,
+  type DedupeStore,
+  MAX_TRANSPORT_MESSAGE_BYTES,
+  newTransportMessageId,
+  replyError,
+  TRANSPORT_HTTP_PATHS,
+  TRANSPORT_MESSAGE_VERSION,
+  TRANSPORT_OPERATIONS,
+  type TransportCall,
+  type TransportCallMessage,
+  TransportError,
+  type TransportErrorCode,
+  type TransportOperation,
+  type TransportReplyMessage,
+  transportDedupeKey,
+} from './transport.js';

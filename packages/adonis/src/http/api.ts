@@ -14,6 +14,7 @@ import {
   type TenantVerifier,
   type VerifiedTenant,
 } from '../topology/verify.js';
+import { type CryptoRpc, createCryptoRpc } from '../transports/rpc.js';
 import { parseListQuery } from './list.js';
 
 interface RouterLike {
@@ -65,10 +66,17 @@ function paramsOf(ctx: HttpContext): Record<string, string> {
 export class CryptoApi {
   readonly prefix: string;
   readonly service: CryptoService;
+  readonly rpc: CryptoRpc;
 
   constructor(private readonly options: CryptoApiOptions) {
     this.prefix = (options.prefix ?? '/_crypto').replace(/\/$/, '');
     this.service = options.service;
+    // The same envelope the broker drivers carry, so `transports.http` and the rest agree.
+    this.rpc = createCryptoRpc({
+      service: options.service,
+      verifyTenant: options.verifyTenant,
+      ...(options.logger ? { logger: options.logger } : {}),
+    });
   }
 
   register(router: RouterLike): void {
@@ -89,6 +97,7 @@ export class CryptoApi {
     this.#route(router, `${p}/v1/keys/:name`, 'PATCH', (ctx) => this.updateKey(ctx));
     this.#route(router, `${p}/v1/keys/:name`, 'DELETE', (ctx) => this.deleteKey(ctx));
     this.#route(router, `${p}/v1/keys/:name/rotate`, 'POST', (ctx) => this.rotateKey(ctx));
+    this.#route(router, `${p}/v1/transport`, 'POST', (ctx) => this.transport(ctx));
 
     for (const operation of OPERATIONS) {
       this.#route(router, `${p}/v1/${operation}`, 'POST', (ctx) => this.operation(ctx, operation));
@@ -262,6 +271,18 @@ export class CryptoApi {
   /* ------------------------------------------------------------------------------------------ */
   /* Keys and audit                                                                              */
   /* ------------------------------------------------------------------------------------------ */
+
+  /**
+   * `POST /v1/transport` — the envelope every non-messaging driver carries, and what the http
+   * driver posts. Answers `200` with `{ ok, result | error }`; an invalid message is a `200` with
+   * `ok: false` and a wire code, never a body the caller could mistake for a result.
+   */
+  async transport(ctx: HttpContext) {
+    this.#cors(ctx);
+    const reply = await this.rpc.handle(bodyOf(ctx));
+    ctx.response.header('cache-control', 'no-store');
+    return ctx.response.status(200).json(reply);
+  }
 
   async whoami(ctx: HttpContext) {
     return this.#run(ctx, async (principal) => {

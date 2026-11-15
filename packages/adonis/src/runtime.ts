@@ -28,8 +28,10 @@ export interface CryptoRuntime {
   api?: CryptoApi;
   /** Tenant only. */
   client?: CryptoClient;
-  /** The same calls everywhere: in-process on a server, over HTTP on a tenant. */
+  /** The same calls everywhere: in-process on a server, over HTTP or a broker on a tenant. */
   operations: CryptoOperations;
+  /** Set when the control plane consumes a broker: shuts its consumer down. */
+  stopTransport?: () => Promise<void>;
   /**
    * The operations of one app, as one actor: a server builds them for the named partition (the
    * console, the CLI), a tenant ignores both (its token decides). Used by the ops commands.

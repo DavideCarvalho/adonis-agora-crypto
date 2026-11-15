@@ -44,6 +44,9 @@ export interface OperationListQuery {
  * control plane) it calls the service; on a tenant it calls the server over HTTP. Same calls either
  * way, so an app moves from local to central by changing `config/config.ts` only.
  */
+import type { CryptoTransport, TransportOperation } from '@adonis-agora/crypto-core';
+import { resolveTenantToken, type TenantTokenSource } from '@adonis-agora/crypto-core';
+
 export interface CryptoOperations {
   encrypt(input: EncryptInput): Promise<EncryptResult>;
   decrypt(input: DecryptInput): Promise<DecryptResult>;
@@ -197,4 +200,43 @@ function parseSort(sort: string): {
     return { field: 'name', direction };
   }
   return { field, direction };
+}
+
+/**
+ * The same operations over a **transport** instead of HTTP directly: the token is resolved per
+ * call, and the operation name is the envelope the control plane verifies. This is what a tenant
+ * with `transport: transports.redis(...)` uses.
+ */
+export function transportOperations(
+  transport: CryptoTransport,
+  token: TenantTokenSource,
+): CryptoOperations {
+  const source = resolveTenantToken(token);
+  const call = async <T>(operation: TransportOperation, input: unknown): Promise<T> =>
+    transport.call<T>({ operation, input, token: await source.get() });
+  return {
+    encrypt: (input) => call('encrypt', input),
+    decrypt: (input) => call('decrypt', input),
+    rewrap: (input) => call('rewrap', input),
+    generateDataKey: (input) => call('datakeys', input),
+    sign: (input) => call('sign', input),
+    verify: (input) => call('verify', input),
+    hmac: (input) => call('hmac', input),
+    encryptBatch: (items) => call('encrypt', { items, batch: true }),
+    decryptBatch: (items) => call('decrypt', { items, batch: true }),
+    signBatch: (items) => call('sign', { items, batch: true }),
+    verifyBatch: (items) => call('verify', { items, batch: true }),
+    listKeys: (input) => call('keys.list', input ?? {}),
+    getKey: (name) => call('keys.get', { name }),
+    createKey: (input) => call('keys.create', input),
+    rotateKey: (name) => call('keys.rotate', { name }),
+    updateKeyPolicy: (name, input) => call('keys.policy', { name, ...input }),
+    deleteKey: (name) => call('keys.delete', { name }),
+    exportKey: (name, version) =>
+      call('keys.export', { name, ...(version !== undefined ? { version } : {}) }),
+    publicKey: (name) => call('keys.public', { name }),
+    audit: (input) => call('audit', input ?? {}),
+    overview: () => call('overview', {}),
+    whoami: () => call('whoami', {}),
+  };
 }

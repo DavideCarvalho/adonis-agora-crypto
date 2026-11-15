@@ -4,11 +4,12 @@ import type { CryptoStore } from './store/store.js';
 
 export type { CryptoKeyringConfig } from './crypto/keyring.js';
 
-import type { TenantTokenSource } from '@adonis-agora/crypto-core';
+import type { CryptoTransport, TenantTokenSource } from '@adonis-agora/crypto-core';
 import type { CryptoKeyringConfig } from './crypto/keyring.js';
 import { LucidStore } from './store/lucid_store.js';
 import { MemoryStore } from './store/memory_store.js';
 import type { TenantVerifierInput } from './topology/verify.js';
+import type { BrokerDriver } from './transports/broker.js';
 
 /** What store factories receive. */
 export interface FactoryContext {
@@ -73,6 +74,11 @@ export interface ControlPlaneConfig extends BaseConfig {
   prefix?: string;
   /** Origins allowed to call the tenant API cross-origin. Default: none. */
   corsOrigins?: string[];
+  /**
+   * Consume the call channel from a broker instead of (or besides) HTTP: the same driver the
+   * tenant uses, served here with `verifyTenant` on every message. Default: HTTP only.
+   */
+  transport?: BrokerDriver;
   store?: Factory<CryptoStore>;
   autoCreateSchema?: boolean;
   /** Postgres: keep every table in this schema (created separately). */
@@ -100,6 +106,11 @@ export interface TenantTopologyConfig extends BaseConfig {
     retries?: number;
     /** Check the token against the server at boot (a warning when it fails). Default `true`. */
     checkOnBoot?: boolean;
+    /**
+     * How this app reaches the control plane. Default `transports.http({ url })`. A broker driver
+     * (`transports.redis({ connection })`) carries the same envelope, with a documented latency.
+     */
+    transport?: CryptoTransport;
   };
   /** FORBIDDEN on a tenant: it holds no keys; the server does. */
   store?: never;
