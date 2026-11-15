@@ -109,7 +109,10 @@ async function install(
   cipher: EnvelopeCipher = base64Cipher,
 ): Promise<DispatchOptions[]> {
   const { sent, dispatcher } = capture();
+  // Both slots: Node 24's fetch reads `.1`, Node 26's reads `.2`. Setting both also keeps the
+  // installer from triggering a real `data:` fetch that would replace this fake with Node's own.
   globals[V1] = dispatcher;
+  globals[V2] = dispatcher;
   await installCryptoEnvelope({
     config,
     outboundCipher: cipher,
@@ -117,6 +120,26 @@ async function install(
     skipPaths: ['/_crypto'],
   });
   return sent;
+}
+
+interface HandlerState {
+  errors: Error[];
+}
+
+/** Runs one dispatch with a handler, and lets the interceptor's async seal land. */
+async function dispatch(options: DispatchOptions): Promise<HandlerState> {
+  const state: HandlerState = { errors: [] };
+  const handler = {
+    onResponseError(_controller: unknown, error: Error) {
+      state.errors.push(error);
+    },
+    onError(error: Error) {
+      state.errors.push(error);
+    },
+  };
+  globals[V1]!.dispatch(options, handler);
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  return state;
 }
 
 const post = (url: string, body: unknown, headers: Record<string, string> = {}) => {
@@ -147,7 +170,7 @@ describe('envelope interceptor — target identification', () => {
     publishDiscovery({ billing: 'https://billing.internal' });
     const sent = await install({ key: 'svc-hub' });
 
-    globals[V1]!.dispatch(post('https://billing.internal/v1/charge', '{"amount":10}'), undefined);
+    await dispatch(post('https://billing.internal/v1/charge', '{"amount":10}'));
 
     expect(sent).toHaveLength(1);
     const wire = sent[0]!;
@@ -163,7 +186,7 @@ describe('envelope interceptor — target identification', () => {
       targets: { billing: 'https://billing.internal' },
     });
 
-    globals[V1]!.dispatch(post('https://billing.internal/v1/charge', '{"a":1}'), undefined);
+    await dispatch(post('https://billing.internal/v1/charge', '{"a":1}'));
 
     expect(sent).toHaveLength(1);
     expect(sent[0]!.headers[ENVELOPE_HEADER]).toBe(ENVELOPE_VERSION);
@@ -176,7 +199,7 @@ describe('envelope interceptor — target identification', () => {
       targets: { billing: 'https://billing.internal' },
     });
 
-    globals[V1]!.dispatch(post('https://unknown.internal/v1/charge', '{"a":1}'), undefined);
+    await dispatch(post('https://unknown.internal/v1/charge', '{"a":1}'));
 
     expect(sent[0]!.headers[ENVELOPE_HEADER]).toBeUndefined();
     expect(await bodyOf(sent[0]!.body)).toBe('{"a":1}');
@@ -198,11 +221,10 @@ describe('envelope interceptor — target identification', () => {
     publishDiscovery({ billing: 'https://billing.internal' });
     const sent = await install({ key: 'svc-hub' });
 
-    globals[V1]!.dispatch(
+    await dispatch(
       post('https://billing.internal/v1/charge', '{"a":1}', {
         [ENVELOPE_HEADER]: ENVELOPE_VERSION,
       }),
-      undefined,
     );
 
     expect(await bodyOf(sent[0]!.body)).toBe('{"a":1}');
@@ -212,11 +234,10 @@ describe('envelope interceptor — target identification', () => {
     publishDiscovery({ billing: 'https://billing.internal' });
     const sent = await install({ key: 'svc-hub' });
 
-    globals[V1]!.dispatch(
+    await dispatch(
       post('https://billing.internal/upload', 'binary', {
         'content-type': 'multipart/form-data; boundary=x',
       }),
-      undefined,
     );
 
     expect(sent[0]!.headers[ENVELOPE_HEADER]).toBeUndefined();
@@ -226,7 +247,7 @@ describe('envelope interceptor — target identification', () => {
     publishDiscovery({ billing: 'https://billing.internal' });
     const sent = await install({ key: 'svc-hub' });
 
-    globals[V1]!.dispatch(post('http://billing/v1/charge', '{"a":1}'), undefined);
+    await dispatch(post('http://billing/v1/charge', '{"a":1}'));
 
     expect(sent[0]!.headers[ENVELOPE_HEADER]).toBe(ENVELOPE_VERSION);
   });
@@ -237,11 +258,11 @@ describe('envelope interceptor — target identification', () => {
     };
     const sent = await install({ key: 'svc-hub' });
 
-    globals[V1]!.dispatch(post('https://billing.internal/v1/charge', '{"a":1}'), undefined);
+    await dispatch(post('https://billing.internal/v1/charge', '{"a":1}'));
     expect(sent[0]!.headers[ENVELOPE_HEADER]).toBe(ENVELOPE_VERSION);
 
     // Without `resolve`, a symbolic host cannot be identified yet: telescope must rewrite first.
-    globals[V1]!.dispatch(post('http://billing/v1/charge', '{"a":1}'), undefined);
+    await dispatch(post('http://billing/v1/charge', '{"a":1}'));
     expect(sent[1]!.headers[ENVELOPE_HEADER]).toBeUndefined();
   });
 
@@ -254,7 +275,7 @@ describe('envelope interceptor — target identification', () => {
       'content-type': 'application/json',
       authorization: 'Bearer tenant-token',
     }) as never;
-    globals[V1]!.dispatch(options, undefined);
+    await dispatch(options);
 
     expect(sent[0]!.headers.authorization).toBe('Bearer tenant-token');
     expect(sent[0]!.headers[ENVELOPE_HEADER]).toBe(ENVELOPE_VERSION);
@@ -281,7 +302,7 @@ describe('envelope interceptor — target identification', () => {
       inboundCipher: base64Cipher,
       skipPaths: ['/_crypto'],
     });
-    globals[V1]!.dispatch(post('https://billing.internal/v1/charge', '{"a":1}'), undefined);
+    await dispatch(post('https://billing.internal/v1/charge', '{"a":1}'));
 
     expect(seen).toEqual(['trace:/v1/charge', 'terminal:/v1/charge']);
   });
@@ -298,10 +319,12 @@ describe('envelope interceptor — target identification', () => {
     };
     const sent = await install({ key: 'svc-hub' }, failing);
 
-    globals[V1]!.dispatch(post('https://billing.internal/v1/charge', '{"secret":1}'), undefined);
+    const state = await dispatch(post('https://billing.internal/v1/charge', '{"secret":1}'));
 
-    expect(sent).toHaveLength(1);
-    await expect(bodyOf(sent[0]!.body)).rejects.toThrow(/crypto server is down/);
+    // The request was failed through the handler: it never reached the dispatcher.
+    expect(sent).toHaveLength(0);
+    expect(state.errors).toHaveLength(1);
+    expect(state.errors[0]!.message).toMatch(/crypto server is down/);
   });
 
   it('refuses to install outbound sealing without a key', async () => {

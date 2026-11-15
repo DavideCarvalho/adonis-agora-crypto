@@ -226,15 +226,42 @@ function payloadOf(text: string): unknown {
   }
 }
 
+/** Marks a request already taken over by an interceptor, in case two dispatcher slots both apply. */
+const takenOver = new WeakSet<object>();
+
+/** The probe the installer sends through `fetch` to prove the interceptor is really in the chain. */
+const PROBE_ORIGIN = 'http://agora-envelope.invalid';
+const PROBE_PATH = '/__agora_envelope_probe__';
+
+interface HandlerLike {
+  onResponseError?(controller: unknown, error: Error): void;
+  onError?(error: Error): void;
+}
+
+/** Fails a request through undici's handler, whatever shape this version gives it. */
+function failRequest(handler: unknown, error: Error): void {
+  const target = handler as HandlerLike | undefined;
+  try {
+    if (typeof target?.onResponseError === 'function') {
+      target.onResponseError(null, error);
+      return;
+    }
+    target?.onError?.(error);
+  } catch {
+    // The handler is gone (aborted request): nothing left to fail.
+  }
+}
+
 /**
  * The outbound interceptor: composes onto whatever dispatcher is already global, so the trace
  * (telescope) and identity (authkit-client) interceptors stay in the chain.
  *
- * The body is not read here — `dispatch` must return synchronously — it is replaced by an async
- * generator that seals when undici consumes it. If sealing fails, the request fails: plaintext is
- * never sent.
+ * `dispatch` is not called synchronously: sealing needs the crypto server, so the interceptor takes
+ * the request, seals it and dispatches a copy — returning `false`, which is undici's "handled
+ * asynchronously". If sealing fails the request is failed through the handler: plaintext is never
+ * sent.
  */
-function envelopeInterceptor(resolved: ResolvedOutboundEnvelope) {
+function envelopeInterceptor(resolved: ResolvedOutboundEnvelope, probe?: { seen: boolean }) {
   return (dispatch: Dispatch) =>
     (options: DispatcherOptions, handler: unknown): boolean => {
       let url: URL;
@@ -242,6 +269,12 @@ function envelopeInterceptor(resolved: ResolvedOutboundEnvelope) {
         url = new URL(options.path, options.origin as string | URL | undefined);
       } catch {
         return dispatch(options, handler);
+      }
+      // The installer's self-check: prove the dispatcher `fetch` really uses runs this interceptor.
+      if (probe && url.origin === PROBE_ORIGIN && url.pathname === PROBE_PATH) {
+        probe.seen = true;
+        failRequest(handler, new Error('crypto: envelope self-check (never sent)'));
+        return true;
       }
       if (isSealing()) return dispatch(options, handler);
       if (options.body === undefined || options.body === null) return dispatch(options, handler);
@@ -263,12 +296,9 @@ function envelopeInterceptor(resolved: ResolvedOutboundEnvelope) {
       // Already sealed (`cryptoFetch`, or a second interceptor in the chain): never seal twice.
       if (headers[ENVELOPE_HEADER] !== undefined) return dispatch(options, handler);
       if (!isSealable(headers['content-type'])) return dispatch(options, handler);
-
-      headers['content-type'] = 'application/json';
-      headers[ENVELOPE_HEADER] = ENVELOPE_VERSION;
-      headers[ENVELOPE_KEY_HEADER] = key;
-      // The sealed body has a different length; undici must not reuse the clear one.
-      delete headers['content-length'];
+      // The same request may reach two composed dispatchers (`.1` and `.2`): take it over once.
+      if (takenOver.has(options)) return dispatch(options, handler);
+      takenOver.add(options);
 
       const original = options.body;
       const envelope = cryptoEnvelope({
@@ -276,54 +306,73 @@ function envelopeInterceptor(resolved: ResolvedOutboundEnvelope) {
         key,
         ...(resolved.aad !== undefined ? { aad: resolved.aad } : {}),
       });
-      options.headers = headers;
-      options.body = (async function* sealed() {
-        const text = await bodyText(original);
-        const ciphertext = await withoutEnvelope(() => envelope.seal(payloadOf(text)));
-        yield Buffer.from(JSON.stringify({ [ENVELOPE_FIELD]: ciphertext }));
+      void (async () => {
+        try {
+          const text = await bodyText(original);
+          const ciphertext = await withoutEnvelope(() => envelope.seal(payloadOf(text)));
+          headers['content-type'] = 'application/json';
+          headers[ENVELOPE_HEADER] = ENVELOPE_VERSION;
+          headers[ENVELOPE_KEY_HEADER] = key;
+          // The sealed body has a different length; undici must not reuse the clear one.
+          delete headers['content-length'];
+          dispatch(
+            {
+              ...options,
+              headers,
+              body: JSON.stringify({ [ENVELOPE_FIELD]: ciphertext }),
+            },
+            handler,
+          );
+        } catch (error) {
+          failRequest(handler, error instanceof Error ? error : new Error(String(error)));
+        }
       })();
-
-      return dispatch(options, handler);
+      return false;
     };
 }
 
 /**
- * Composes the interceptor onto Node's global dispatcher. It never replaces the dispatcher: it reads
- * the current one and composes, which is what keeps this compatible with every other interceptor.
+ * Composes the interceptor onto Node's global dispatcher — never replacing it with a new `Agent`, so
+ * every other interceptor stays in the chain.
  *
- * When no dispatcher exists yet, Node has not materialised one; a `data:` fetch does that without
- * touching the network. Both known slots are kept in sync so a later `undici` import (which reads
- * `.2` and rewrites `.1`) finds a dispatcher instead of installing a fresh, interceptor-less one.
+ * Node 24's fetch reads `.1`; Node 26's bundled undici 8 reads `.2`, where `.1` is only a legacy
+ * wrapper for `undici@7` callers. Both slots are composed, and only when they already exist: the
+ * bundled undici installs its dispatcher on the first `fetch()` call (and overwrites `.1` while
+ * loading), so the load is triggered first and nothing is fabricated.
  */
 async function installDispatcher(resolved: ResolvedOutboundEnvelope): Promise<boolean> {
   const slots = globalThis as unknown as Record<symbol, DispatcherLike | undefined>;
-  if (!slots[DISPATCHER_V1] && !slots[DISPATCHER_V2]) {
+  if (!slots[DISPATCHER_V2]) {
+    // Node 26 installs the dispatcher on the first fetch; a `data:` URL touches no network.
     try {
-      await fetch('data:text/plain,');
+      await fetch('data:,');
     } catch {
       // No global fetch: there is nothing to intercept.
     }
   }
-  const v1 = slots[DISPATCHER_V1];
-  const v2 = slots[DISPATCHER_V2];
-  const interceptor = envelopeInterceptor(resolved);
-  const compose = (base: DispatcherLike): DispatcherLike | undefined =>
-    typeof base.compose === 'function' ? base.compose([interceptor]) : undefined;
-
-  if (v1 && v2 && v1 !== v2) {
-    const composedV1 = compose(v1);
-    const composedV2 = compose(v2);
-    if (composedV1) slots[DISPATCHER_V1] = composedV1;
-    if (composedV2) slots[DISPATCHER_V2] = composedV2;
-    return Boolean(composedV1 ?? composedV2);
+  const probe = { seen: false };
+  const interceptor = envelopeInterceptor(resolved, probe);
+  let installed = false;
+  for (const slot of [DISPATCHER_V2, DISPATCHER_V1]) {
+    const current = slots[slot];
+    if (!current || typeof current.compose !== 'function') continue;
+    try {
+      slots[slot] = current.compose([interceptor]);
+      installed = true;
+    } catch {
+      // A dispatcher that cannot compose is left exactly as it was.
+    }
   }
-  const base = v1 ?? v2;
-  if (!base) return false;
-  const composed = compose(base);
-  if (!composed) return false;
-  slots[DISPATCHER_V1] = composed;
-  slots[DISPATCHER_V2] ??= composed;
-  return true;
+  if (!installed) return false;
+
+  // The self-check: a probe to a reserved, non-resolvable origin must come back through us. If it
+  // does not, the app would send plaintext to a configured app, so boot fails instead.
+  try {
+    await fetch(`${PROBE_ORIGIN}${PROBE_PATH}`);
+  } catch {
+    // The probe is meant to fail: we only care that our interceptor saw it.
+  }
+  return probe.seen;
 }
 
 function resolveTargets(
@@ -414,8 +463,10 @@ export async function installCryptoEnvelope(
       skipPaths: options.skipPaths ?? ['/_crypto'],
     });
     if (!installed) {
-      options.warn?.(
-        '[@adonis-agora/crypto] envelope: no global fetch/undici dispatcher to compose onto; outbound sealing is off',
+      // Not a warning: booting with `envelope.targets` configured but no interceptor in the chain
+      // would send plaintext to the very apps this block exists to seal.
+      throw new Error(
+        'crypto: the envelope interceptor is not in the global fetch dispatcher (another library replaced it after boot, or this runtime has no undici dispatcher); refusing to start with app-to-app encryption configured',
       );
     }
   }

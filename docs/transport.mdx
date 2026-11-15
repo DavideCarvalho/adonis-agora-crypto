@@ -32,6 +32,13 @@ The provider installs both halves from that block alone:
 - **inbound** — a **server** middleware registered by the provider (no `start/kernel.ts` edit) that
   opens the envelope before the body parser hands the body to the route.
 
+On Node 24 `fetch` reads `Symbol.for('undici.globalDispatcher.1')`; on Node 26 (bundled undici 8) it
+reads `.2`, and `.1` is only a legacy wrapper. The provider triggers the dispatcher's lazy install
+first and composes onto **every** slot that exists, so the interceptor is in the chain on both. At boot
+it also proves it: a probe to a reserved `.invalid` origin must come back through the interceptor,
+otherwise the app refuses to start — a configuration that would send plaintext to a sealed app is not
+something to discover in production.
+
 ### Which app is the target
 
 The app name for an origin comes from telescope's **service discovery**, read from the shared slot
