@@ -1,5 +1,12 @@
 # @adonis-agora/crypto-react
 
+## 0.1.1
+
+### Patch Changes
+
+- Updated dependencies [[`ef09ac8`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/ef09ac86208132eba42e25fc6ddac111fe5e964b)]:
+  - @adonis-agora/crypto-core@0.3.0
+
 ## 0.1.0
 
 ### Minor Changes
