@@ -3,6 +3,7 @@ export {
   type SealedOpenActor,
   type SealedOpenEvent,
   type SealedOpenEventInput,
+  sealedOpenChannel,
   sealedOpenEvent,
 } from './audit.js';
 export {

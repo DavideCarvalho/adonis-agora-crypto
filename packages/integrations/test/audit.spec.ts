@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SEALED_OPEN_EVENT, sealedOpenEvent } from '../src/audit.js';
+import { SEALED_OPEN_EVENT, sealedOpenChannel, sealedOpenEvent } from '../src/audit.js';
 
 describe('sealed-open event (recipient-held)', () => {
   it('uses actor ?? sub, exactly like the crypto audit', () => {
@@ -33,6 +33,17 @@ describe('sealed-open event (recipient-held)', () => {
     expect(
       sealedOpenEvent({ actor: 'cli:davi', subject: 'user:7', key: 'doctor-7' }),
     ).toMatchObject({ actor: 'cli:davi' });
+  });
+
+  it('distinguishes the bus channel (who emitted) from the payload event (what happened)', () => {
+    // Config is the emitter, so the channel is config's; the fact is product-neutral.
+    expect(sealedOpenChannel('config')).toBe('agora:config:sealed.open');
+    expect(sealedOpenChannel('agent')).toBe('agora:agent:sealed.open');
+    expect(sealedOpenEvent({ subject: 'user:7', key: 'app:streaming' }).event).toBe(
+      'crypto:sealed.open',
+    );
+    expect(sealedOpenChannel('config')).not.toBe(SEALED_OPEN_EVENT);
+    expect(() => sealedOpenChannel('')).toThrow(/emitting lib/);
   });
 
   it('stamps the time, and refuses an anonymous open', () => {

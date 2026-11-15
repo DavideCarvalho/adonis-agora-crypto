@@ -131,8 +131,11 @@ emitter.emit(
 - `kid` is the key version that opened it (from the `agora:pk1` header), so a rotation is visible.
 - `result: 'error'` for a refused/failed open; an open with no identity at all throws instead of
   emitting an anonymous row.
-- Config emits it as `config:sealed.open` and also calls `tenant.onSealedOpen(event)`, both with this
-  payload.
+- The **payload** names the fact (`event: 'crypto:sealed.open'`, product-neutral); the **bus channel**
+  names who emitted it: `agora:<lib>:sealed.open` from `sealedOpenChannel(lib)`. Config emits on
+  `agora:config:sealed.open` — not `agora:crypto:sealed.open`, which would read as if the crypto lib
+  had seen the open (it cannot: recipient-held is opened on the device) — and calls
+  `tenant.onSealedOpen(event)` with the same payload.
 
 ## Why not just a shared symmetric key?
 

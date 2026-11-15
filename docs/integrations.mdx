@@ -207,6 +207,34 @@ device, so the app emits `crypto:sealed.open` with `sealedOpenEvent({ actor, sub
 resource })`: `actor ?? sub` (the crypto audit's own rule), the `kid` that opened it and a timestamp.
 `openWithAudit()` in `@adonis-agora/crypto-react` returns the value plus `kid`/`at` for that event.
 
+## Adopting it without a dependency
+
+The Agora rule is that a lib does not depend on another product lib, and
+`crypto-integrations` is not on npm yet. Until it is, a lib can implement the same seams **structurally**
+— these are the whole contract, and they are stable:
+
+```ts
+// 1. the stored reference (server-held), nothing else
+type CryptoReference = { key: string; ciphertext: string }
+
+// 2. the AAD both sides derive
+const configCryptoAad = (entry: { app: string; environment: string; label?: string; key: string }) =>
+  `config:${entry.app}:${entry.environment}:${entry.label ?? 'main'}:${entry.key}`
+
+// 3. the audit payload + channel (recipient-held)
+//    payload.event = 'crypto:sealed.open'
+//    channel       = `agora:${lib}:sealed.open`   (lib = the emitter, e.g. 'config')
+//    shape         = { event, v: 1, actor, subject?, key, kid?, resource?, at, result }
+```
+
+Capabilities: sealing needs `crypto:encrypt:<key>`, opening needs `crypto:decrypt:<key>`; the emitting
+lib's token never holds the other half. `decrypt` accepts a `context` (≤200 chars, no control
+characters) recorded as `metadata.context` on the crypto audit, refusals included.
+
+When `@adonis-agora/crypto-integrations` 0.1.0 is published, swap the copies for
+`configCrypto`/`configCryptoAad`/`sealedOpenEvent`/`sealedOpenChannel` — or add the package as an
+optional peer, the same way `@adonis-agora/authkit-client` is optional elsewhere.
+
 ## Seams still missing in the rc libs
 
 These would make an integration cleaner, but are **not** changed today:

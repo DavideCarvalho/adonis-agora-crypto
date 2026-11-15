@@ -7,8 +7,26 @@
  * `actor ?? sub` rule.
  */
 
-/** The diagnostics/Telescope event name a recipient-held open is emitted under. */
+/**
+ * The **semantic** event type carried in the payload (`event` field). It names the fact, not the
+ * emitter, so every product that opens a share emits the same payload.
+ */
 export const SEALED_OPEN_EVENT = 'crypto:sealed.open';
+
+/**
+ * The **diagnostics bus channel** it is emitted on: `agora:<emitting lib>:sealed.open`.
+ *
+ * The channel names who emitted it (the lib whose entry was opened), the same way authkit emits
+ * `agora:authkit:<type>`; the payload names the fact (`crypto:sealed.open`). So config emits
+ * `agora:config:sealed.open` with `event: 'crypto:sealed.open'` — not `agora:crypto:sealed.open`,
+ * which would read as if the crypto lib had seen the open (it did not: recipient-held is local).
+ */
+export function sealedOpenChannel(lib: string): string {
+  if (typeof lib !== 'string' || lib.trim() === '') {
+    throw new Error('crypto: sealedOpenChannel needs the emitting lib name (e.g. "config")');
+  }
+  return `agora:${lib}:sealed.open`;
+}
 
 /** Who opened it: `actor ?? sub`, exactly like the crypto server's audit. */
 export type SealedOpenActor = string | { sub?: string | undefined; email?: string | undefined };
