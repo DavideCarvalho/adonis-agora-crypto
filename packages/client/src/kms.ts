@@ -1,4 +1,5 @@
 import type { CryptoClient } from './client.js';
+import type { EnvelopeCipher } from './envelope.js';
 
 /**
  * The crypto kit's `KmsAdapter`, declared structurally so this package never imports
@@ -14,8 +15,11 @@ export interface KmsAdapterLike {
 }
 
 export interface CryptoServerKmsOptions {
-  /** The crypto server client (URL, partition, token). */
-  client: CryptoClient;
+  /**
+   * The crypto server client (URL, partition, token), or anything with the same `encrypt`/`decrypt`
+   * shape — e.g. the in-process service cipher when the server is embedded in this app.
+   */
+  client: CryptoClient | EnvelopeCipher;
   /** The `aes256-gcm` key the data keys are wrapped with. */
   key: string;
   /**

@@ -1,0 +1,177 @@
+---
+title: Integrations
+description: The 0.x package that plugs @adonis-agora/crypto into authkit, agent, config, durable, flags and any HTTP call — without touching the rc libs.
+icon: Plug
+---
+
+`@adonis-agora/crypto-integrations` holds the seams between the crypto server and the other Agora
+libs. It stays **0.x on purpose**: the rc libs are untouched, and every integration is one small
+import instead of a config option added to a package you already tested.
+
+It works the same with the crypto server **embedded** in the app or **remote**:
+
+```ts
+// remote (topology: 'tenant', or an app calling a central server)
+const source = { client: crypto }              // a CryptoClient
+
+// embedded (standalone / control-plane): no HTTP hop
+const source = { service, partition: 'meuprontoo' }
+```
+
+Every helper takes `{ source, key? }`; each subpath defaults to its lib's key convention.
+
+## KMS roots — `/authkit`, `/agent`, `/config`
+
+```sh
+node ace crypto:keys:create authkit-root --type aes256-gcm
+node ace crypto:keys:create agent-poppy-root --type aes256-gcm
+node ace crypto:keys:create config-root --type aes256-gcm
+```
+
+```ts title="config/authkit.ts"
+import { authkitKms, authkitKmsCheck } from '@adonis-agora/crypto-integrations/authkit'
+
+export default defineConfig({
+  // …
+  crypto: { kms: authkitKms({ source: { client: crypto } }) },
+})
+```
+
+```ts title="config/poppy.ts (agent)"
+import { agentPoppyKms, agentPoppyKmsCheck } from '@adonis-agora/crypto-integrations/agent'
+
+export default defineConfig({
+  // …
+  crypto: { kms: agentPoppyKms({ source: { client: crypto } }) },
+})
+```
+
+```ts title="config/config.ts (config control plane)"
+import { configKms, configKmsCheck } from '@adonis-agora/crypto-integrations/config'
+
+export default defineConfig({
+  topology: 'control-plane',
+  verifyTenant,
+  crypto: { kms: configKms({ source: { client: crypto } }) },
+})
+```
+
+Each lib then seals every value with a data key wrapped by its root on the crypto server: rotating
+the root is `node ace crypto:keys:rotate authkit-root`, old values keep opening, and no key material
+sits in the lib's database. The keyring's `purpose` is bound into the wrap, so a data key from
+`authkit-root` cannot open a config value.
+
+### Doctor
+
+```ts
+import { registerDoctorChecks } from '@adonis-agora/crypto'
+import { authkitKmsCheck } from '@adonis-agora/crypto-integrations/authkit'
+
+await registerDoctorChecks(app.container, [authkitKmsCheck({ source: { client: crypto } })])
+```
+
+`node ace agora:doctor --lib authkit --deep` then reports `authkit.kms`: the key exists, it is an
+`aes256-gcm` key, and this process really sealed and opened a value with it — which catches a missing
+key, a wrong type, a token without `crypto:encrypt:<key>` / `crypto:decrypt:<key>`, and a crypto
+server whose root changed. Two audit rows per run, by design.
+
+## durable — `/durable`
+
+durable accepts a ready instance for `transport` and `controlPlane`, so the decorators wrap whatever
+you already configured:
+
+```ts title="config/durable.ts"
+import { encryptedControlPlane, encryptedTransport } from '@adonis-agora/crypto-integrations/durable'
+
+export default defineConfig({
+  transports: {
+    default: encryptedTransport(transports.redis({ connection: 'main' }), {
+      source: { client: crypto },
+      key: 'durable-tasks',
+    }),
+  },
+  controlPlane: encryptedControlPlane(new RedisControlPlane({ connection: 'main' }), {
+    source: { client: crypto },
+    key: 'durable-tasks',
+    aad: 'control',
+  }),
+})
+```
+
+What is sealed and what stays readable:
+
+| Message | Sealed | Clear (routing / dedupe) |
+| --- | --- | --- |
+| `dispatch(task)` | `input` | `runId`, `seq`, `stepId`, `name`, `group`, `attempt`, `priority`, `traceparent`, `transport` |
+| `onResult` | `output`, a step `error` | `runId`, `seq`, `stepId`, `status`, `startedAt` |
+| `onHeartbeat` | `progress` | `runId`, `stepId`, `group`, `at` |
+| `publishControl` (event) | `event` | `kind`, `from`, `runId` |
+| `publishControl` (cancel/enqueued/schedulePause) | — | everything (routing only) |
+
+`onControl` keeps the broker's delivery order: every message, encrypted or not, goes through one
+serialized chain before the handler runs, so an `enqueued` can never overtake the `completed` before
+it.
+
+:::warning Interop
+An encrypted channel is not readable by a plain consumer. A NestJS fleet (or any service without the
+decorator) on the same Redis channel sees sealed `event` payloads it cannot open — upgrade both sides
+together, or run the encrypted plane on its own channel. The same applies to workers: a worker
+without `encryptedTransport` receives `{ agoraSealed }` instead of `input`.
+:::
+
+`strict: true` makes the receiver refuse a plain payload instead of passing it through (use it once
+the whole fleet is upgraded; during a rollout the default passes plain values untouched).
+
+## flags — `/flags`
+
+```ts title="config/flags.ts"
+import { flagsEnvelope } from '@adonis-agora/crypto-integrations/flags'
+
+const envelope = flagsEnvelope({ source: { client: crypto }, aad: 'flags' })
+
+export default defineConfig({
+  // …
+  transport: transports.http({
+    url: env.get('FLAGS_URL'),
+    token,
+    partition: 'streaming',
+    ...envelope,                        // { fetch }
+  }),
+  sinks: [
+    sinks.posthog({ apiKey: env.get('POSTHOG_KEY'), ...envelope }),
+    sinks.clickhouse({ url: env.get('CLICKHOUSE_URL'), ...envelope }),
+  ],
+})
+```
+
+`transports.http` and the posthog/clickhouse sinks take a `fetch`; every batch they send is sealed to
+the flags server, which opens it with the same key (`flags-events` by default).
+
+## Any HTTP call — `/http`
+
+```ts
+import { httpEnvelope } from '@adonis-agora/crypto-integrations/http'
+
+const envelope = httpEnvelope({ source: { client: crypto }, key: 'svc-config' })
+
+// authkit token requests
+const token = authkitTenantToken({ issuer, clientId, clientSecret, resource: 'urn:agora:config', ...envelope })
+
+// config tenant fetches
+const config = createConfigClient({ url, partition: 'streaming', token, ...envelope })
+```
+
+The receiver uses `cryptoEnvelopeMiddleware({ client, key })` (or `{ service, partition }`) from
+`@adonis-agora/crypto`, and `cryptoEnvelopeReply()` to answer encrypted. See
+[encrypted requests](/docs/crypto/transport).
+
+## Seams still missing in the rc libs
+
+These would make an integration cleaner, but are **not** changed today:
+
+| Lib | File | What is missing |
+| --- | --- | --- |
+| flags | `packages/adonis/src/topology/remote_source.ts` | the tenant ruleset fetch builds its own `fetch`; a `fetch` option (like `transports.http`) would let the ruleset read be encrypted too |
+| durable | `packages/adonis/src/transports/*` | `dispatchWorkflowTask`, `dispatchStepEvent` and the P4 start-run/run-request/reply/tenant-event methods carry payloads the decorator does not cover yet; a hook per payload (or a `sealPayload` option) would close them |
+| config | `packages/client/src/client.ts` | `fetch` already exists; a `payloadCodec` would let the whole document be sealed, not just the transport |
+| authkit-server | `src/crypto/authkit_crypto.ts` | `kms` exists; a `kmsKey` name convention would remove the custom key option |
