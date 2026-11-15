@@ -88,6 +88,22 @@ Both are off by default, on purpose.
 
   Prefer not to export: a key that never leaves the server cannot leak from an app.
 
+## Rotating the root that seals the material
+
+The versions above rotate a *key*. Independently, the **root** that seals every key's material can
+rotate too: prepend a key to `crypto.keys`, or switch to a KMS. While both roots are configured
+everything keeps working; then move the stored material:
+
+```sh
+node ace crypto:keys:reseal --dry-run   # how many versions would move
+node ace crypto:keys:reseal             # move them
+```
+
+Keys, versions, public halves and every ciphertext stay the same — only the envelope around the
+private material changes. `node ace agora:doctor --lib crypto --deep` reports a version sealed with a
+retired root as a warning, and one that no configured root opens as an error (restore the root: it
+cannot be re-created).
+
 ## Metadata, never material
 
 Every read — the console, the CLI, the MCP tools, `keys.list` — returns metadata only: name, type,

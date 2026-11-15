@@ -91,6 +91,14 @@ export interface CryptoStore {
     next: { latestVersion: number; updatedAt: string; updatedBy: string },
   ): Promise<void>;
   updateKey(partition: string, name: string, patch: KeyPolicyPatch): Promise<void>;
+  /** Rewrites one version's sealed material (the root keyring rotated; the key itself did not). */
+  replaceMaterial(
+    partition: string,
+    name: string,
+    version: number,
+    sealed: string,
+    kid?: string,
+  ): Promise<void>;
   /** Marks the key deleted and destroys every version's material. */
   deleteKey(partition: string, name: string, at: string, by: string): Promise<void>;
   appendAudit(record: CryptoAuditRecord): Promise<void>;

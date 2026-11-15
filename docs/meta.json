@@ -1,4 +1,16 @@
 {
   "title": "Crypto",
-  "pages": ["index", "getting-started", "keys", "operations", "authentication", "deployment", "kms"]
+  "pages": [
+    "index",
+    "getting-started",
+    "keys",
+    "operations",
+    "authentication",
+    "deployment",
+    "kms",
+    "console",
+    "commands",
+    "mcp",
+    "doctor"
+  ]
 }
