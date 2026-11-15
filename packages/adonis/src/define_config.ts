@@ -34,6 +34,49 @@ export const stores = {
   },
 };
 
+/** One outbound target: the origin itself, or the origin plus its own key. */
+export type CryptoEnvelopeTarget = string | { url: string; key?: string };
+
+/**
+ * App-to-app encryption, wired by configuration only: every app keeps calling plain `fetch` and
+ * serving plain routes, and the provider installs the two halves.
+ *
+ * - **outbound**: an undici interceptor composed onto the global dispatcher seals the JSON body of a
+ *   request to a configured exact origin (composed, never replacing the dispatcher, so telescope's
+ *   trace interceptor and authkit-client's token interceptor keep working);
+ * - **inbound**: a server middleware opens the envelope before the route reads the body, so
+ *   `request.body()`, `request.all()` and `request.validateUsing()` see the plaintext.
+ *
+ * The key is an `aes256-gcm` key both sides hold on the crypto server under the same name.
+ */
+export interface CryptoEnvelopeConfig {
+  /** Outbound: name → origin. Bodies sent to these **exact origins** are sealed; nothing else is. */
+  targets?: Record<string, CryptoEnvelopeTarget>;
+  /** The shared key every target uses. A target may override it with `{ url, key }`. */
+  key?: string;
+  /** Inbound: the key names this app opens (`x-crypto-key`). Default: `key`. */
+  accept?: string | string[];
+  /**
+   * The crypto app (partition) whose keys hold the shared key. Default: the app's own partition —
+   * required on a control plane, where there is no single app.
+   */
+  partition?: string;
+  /** Extra AAD bound into every envelope. Both sides must configure the same value. */
+  aad?: string;
+  /** Refuse a request when it carries no envelope. Default `false` (it passes through untouched). */
+  required?: boolean;
+  /** Refuse an envelope older than this, in seconds. Default `300`. */
+  maxAgeSec?: number;
+  /** How far in the future an `iat` may be, in seconds. Default `60`. */
+  clockSkewSec?: number;
+  /** Largest envelope accepted on the way in, in bytes. Default 2 MiB. */
+  maxBytes?: number;
+  /** Set `false` to install only the outbound interceptor. Default: on when a key is accepted. */
+  inbound?: boolean;
+  /** Set `false` to install only the inbound middleware. Default: on when `targets` is set. */
+  outbound?: boolean;
+}
+
 interface BaseConfig {
   /** Warehouse this process belongs to. Default `production` on a server, `NODE_ENV` on a tenant. */
   environment?: string;
@@ -41,6 +84,8 @@ interface BaseConfig {
   crypto?: CryptoKeyringConfig;
   /** Batch ceiling for the batch endpoints. Default `100`. */
   maxBatchSize?: number;
+  /** App-to-app encryption (interceptor + middleware). Nothing is installed when this is absent. */
+  envelope?: CryptoEnvelopeConfig;
 }
 
 /** An app that owns its keys locally and calls itself in process (no HTTP hop). */

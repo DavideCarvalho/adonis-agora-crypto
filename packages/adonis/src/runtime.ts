@@ -1,6 +1,7 @@
 import type { CryptoClient } from '@adonis-agora/crypto-core';
 import type { CryptoService } from './crypto/service.js';
 import type { CryptoApi } from './http/api.js';
+import type { ResolvedInboundEnvelope } from './http/envelope_global.js';
 import type { CryptoOperations } from './operations.js';
 import type { CryptoStore } from './store/store.js';
 import type { TenantVerifier } from './topology/verify.js';
@@ -35,6 +36,12 @@ export interface CryptoRuntime {
   stopTransport?: () => Promise<void>;
   /** The control plane's tenant verifier, so an out-of-band channel (durable workflow) can use it. */
   verifyTenant?: TenantVerifier;
+  /**
+   * Set when `config/crypto.ts` has an inbound `envelope`: the server middleware opens the request
+   * body with this app's own cipher. Per-app state on purpose — two apps in one process (tests) each
+   * keep their own.
+   */
+  envelope?: ResolvedInboundEnvelope;
   /**
    * The operations of one app, as one actor: a server builds them for the named partition (the
    * console, the CLI), a tenant ignores both (its token decides). Used by the ops commands.

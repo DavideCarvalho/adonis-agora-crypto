@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url';
-import { createCryptoClient } from '@adonis-agora/crypto-core';
+import { createCryptoClient, type EnvelopeCipher } from '@adonis-agora/crypto-core';
 import type { HttpContext } from '@adonisjs/core/http';
 import type { ApplicationService } from '@adonisjs/core/types';
 import { createCryptoKeyring, type EncrypterLike, type Keyring } from '../src/crypto/keyring.js';
@@ -27,6 +27,8 @@ import { registerCryptoDevTools } from '../src/dev_tools.js';
 import { registerDoctorChecks } from '../src/doctor/agora_doctor.js';
 import { agoraDoctorChecks } from '../src/doctor/checks.js';
 import { CryptoApi } from '../src/http/api.js';
+import { serviceCipher } from '../src/http/envelope.js';
+import { envelopeSkipPaths } from '../src/http/envelope_global.js';
 import { localOperations, remoteOperations, transportOperations } from '../src/operations.js';
 import type { CryptoRuntime } from '../src/runtime.js';
 import { setRuntime } from '../src/services/accessor.js';
@@ -381,11 +383,79 @@ export default class CryptoProvider {
       // A console that is disabled exposes no dev tools either (the hub rule every Agora lib follows).
       if (this.#consoleConfig?.enabled) await this.#registerDevTools();
     }
+    await this.#installEnvelope(runtime, logger);
     await this.app.booted(async () => {
       if (!runtime.api) return;
       const router = await this.app.container.make('router');
       runtime.api.register(router as never);
     });
+  }
+
+  /**
+   * Wires app-to-app encryption from `config/crypto.ts` — the only configuration it takes. The
+   * outbound interceptor is composed onto the global dispatcher (never replacing it, so telescope and
+   * authkit-client keep their interceptors in the chain); the inbound middleware is registered on the
+   * **server** stack here, so no app needs to edit `start/kernel.ts`.
+   */
+  async #installEnvelope(
+    runtime: CryptoRuntime,
+    logger: { info(message: string): void; warn(message: string): void },
+  ): Promise<void> {
+    const config = this.#config();
+    const envelope = config.envelope;
+    if (!envelope) return;
+    const cipher = this.#envelopeCipher(config, runtime);
+    const { installCryptoEnvelope } = await import('../src/http/envelope_global.js');
+    const installed = await installCryptoEnvelope({
+      config: envelope,
+      outboundCipher: cipher,
+      inboundCipher: cipher,
+      skipPaths: envelopeSkipPaths(config),
+      warn: (message) => logger.warn(message),
+    });
+    if (!installed.inbound) return;
+    try {
+      const server = (await this.app.container.make('server')) as {
+        use(middleware: unknown[]): unknown;
+      };
+      server.use([() => import('../src/http/envelope_global_middleware.js')]);
+      runtime.envelope = installed.inbound;
+    } catch (error) {
+      // No HTTP server in this process (an ace command, a worker): outbound stays on, the inbound
+      // half simply has nothing to attach to.
+      logger.warn(
+        `[@adonis-agora/crypto] envelope: inbound middleware not registered (${(error as Error).message}); outbound sealing stays on`,
+      );
+      return;
+    }
+    logger.info(
+      `[@adonis-agora/crypto] envelope on ${envelope.key !== undefined ? `key "${envelope.key}"` : 'the accepted keys'} (inbound + outbound)`,
+    );
+  }
+
+  /** The cipher each half uses: the app's own client on a tenant, the service in process on a server. */
+  #envelopeCipher(config: CryptoConfig, runtime: CryptoRuntime): EnvelopeCipher {
+    if (runtime.client) {
+      const partition = config.topology === 'tenant' ? config.tenant.partition : undefined;
+      if (config.envelope?.partition !== undefined && config.envelope.partition !== partition) {
+        throw new Error(
+          `crypto: envelope.partition cannot differ from tenant.partition ("${config.envelope.partition}" ≠ "${partition}") — a tenant's keys are the token's partition`,
+        );
+      }
+      return runtime.client;
+    }
+    if (!runtime.service) {
+      throw new Error('crypto: an envelope needs a booted crypto runtime');
+    }
+    const partition =
+      config.envelope?.partition ??
+      (config.topology === 'standalone' ? (config as StandaloneConfig).app : undefined);
+    if (!partition) {
+      throw new Error(
+        'crypto: `envelope.partition` is required on a control plane (the app whose keys hold the shared key)',
+      );
+    }
+    return serviceCipher(runtime.service, partition, 'envelope');
   }
 
   async shutdown(): Promise<void> {

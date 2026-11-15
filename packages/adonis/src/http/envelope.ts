@@ -18,10 +18,34 @@ export interface CryptoEnvelopeState {
   payload: unknown;
 }
 
+/**
+ * The shared Agora request context (`ctx.agora`), declared by authkit-client and merged by every lib
+ * that needs a per-request slot. Never redeclare the field with another type: crypto only adds its
+ * own optional member.
+ */
 declare module '@adonisjs/core/http' {
+  interface AgoraRequestContext {
+    /** Set when the request arrived sealed, by the route middleware or the provider's global one. */
+    envelope?: CryptoEnvelopeState;
+  }
+  /* The shape authkit-client declares: the same `AgoraRequestContext`, the same property type. */
   interface HttpContext {
+    agora: AgoraRequestContext;
+    /** @deprecated read `ctx.agora.envelope` — kept so the first route-middleware adopters keep working. */
     cryptoEnvelope?: CryptoEnvelopeState;
   }
+}
+
+/** Publishes the opened envelope on the shared request context (and the deprecated alias). */
+export function setEnvelopeState(ctx: HttpContext, state: CryptoEnvelopeState): void {
+  const context = ctx as unknown as {
+    agora?: { envelope?: CryptoEnvelopeState };
+    cryptoEnvelope?: CryptoEnvelopeState;
+  };
+  // `agora` is normally created by the first lib that needs it; never assume we are the first.
+  context.agora ??= {};
+  context.agora.envelope = state;
+  context.cryptoEnvelope = state;
 }
 
 export interface CryptoEnvelopeMiddlewareOptions {
@@ -89,7 +113,7 @@ function fail(ctx: HttpContext, status: number, code: string, message: string): 
 /**
  * Decrypts an envelope request before the controller runs, so the rest of the app never sees the
  * ciphertext: the payload replaces the JSON body (`request.body()`, `request.all()` and
- * `request.validateUsing()` all read it) and is also available as `ctx.cryptoEnvelope`.
+ * `request.validateUsing()` all read it) and is also available as `ctx.agora.envelope`.
  *
  * ```ts
  * router.post('/internal/hooks', handler).use(
@@ -157,11 +181,11 @@ export function cryptoEnvelopeMiddleware(options: CryptoEnvelopeMiddlewareOption
       // Adonis 7's supported hook: body(), all() and validateUsing() now read the payload.
       request.updateBody(payload);
     }
-    ctx.cryptoEnvelope = {
+    setEnvelopeState(ctx, {
       key: options.key,
       issuedAt: Math.floor(Date.now() / 1000),
       payload,
-    };
+    });
     return next();
   };
 }
