@@ -1,0 +1,22 @@
+import env from '#start/env'
+import { defineConfig, stores } from '@adonis-agora/crypto'
+
+/**
+ * Where this app gets its crypto.
+ *
+ * - `standalone`: this process holds the keys (a small app, or local development).
+ * - `control-plane`: this process is the server every app connects to.
+ * - `tenant`: every operation goes to a central server over HTTP.
+ */
+export default defineConfig({
+  topology: 'standalone',
+  app: env.get('CRYPTO_APP', 'app'),
+  // Where keys and the audit trail live. `stores.memory()` for a throwaway local app.
+  store: stores.lucid(),
+  // How this server seals its own key material. Default: the app's encryption service.
+  // crypto: { keys: [env.get('CRYPTO_ROOT_KEY')] },
+  console: {
+    // Open outside production; in production, gate it (authkit or your own authorize).
+    // authorize: authkitDashboardAuthorize({ issuer: env.get('AUTHKIT_ISSUER') }),
+  },
+})
