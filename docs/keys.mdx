@@ -1,0 +1,95 @@
+---
+title: Keys
+description: Types, versions, rotation, decryption floor, deletion and export.
+icon: KeySquare
+---
+
+A key is a name, in one app, with a type and a list of versions. Names are lowercase and flat
+(`media`, `orders-v2`): they appear inside capabilities (`crypto:encrypt:media`), so `:` is not
+allowed.
+
+## Types
+
+| Type | What it does | Public half |
+| --- | --- | --- |
+| `aes256-gcm` | `encrypt` / `decrypt` / `rewrap` / `datakey` | — |
+| `x25519` | `encrypt` / `decrypt` / `rewrap` (seal to the key, open with it) | JWK for `sealTo` |
+| `ed25519` | `sign` / `verify` | JWK / JWKS |
+| `hmac-sha256` | `hmac` | — |
+
+`x25519` and `ed25519` publish their public halves, so a caller can seal something the server opens
+(`sealTo`) or verify a signature the server made, without ever seeing a private key.
+
+## Creating a key
+
+```sh
+node ace crypto:keys:create media --type aes256-gcm
+node ace crypto:keys:create inbox --type x25519
+node ace crypto:keys:create webhooks --type ed25519 --exportable
+```
+
+```ts
+await crypto.keys.create({ name: 'media', type: 'aes256-gcm', description: 'media URLs' })
+```
+
+A key starts with version 1, `minDecryptionVersion: 1`, `deletionAllowed: false` and
+`exportable: false`. The name is reserved forever: deleting a key does not free it.
+
+## Versions and rotation
+
+```sh
+node ace crypto:keys:rotate media
+```
+
+```ts
+const rotated = await crypto.keys.rotate('media')   // latestVersion: 2
+```
+
+A rotation adds a version; it does not rewrite data. New writes use the latest version, and every
+ciphertext names the version that sealed it, so old ciphertext keeps opening. `rewrap` moves an old
+value to the latest version without returning the plaintext:
+
+```ts
+const { ciphertext } = await crypto.rewrap({ key: 'media', ciphertext: old })
+```
+
+### Retiring a version
+
+`minDecryptionVersion` is the floor: a version below it no longer decrypts (and `rewrap` on such a
+ciphertext fails, so a leftover row is visible instead of silently readable).
+
+```ts
+await crypto.keys.updatePolicy('media', { minDecryptionVersion: 2 })
+```
+
+Retire a version only after every stored ciphertext was rewrapped. The console shows each version's
+status: `latest`, `decryptable`, or `retired`.
+
+## Deletion and export
+
+Both are off by default, on purpose.
+
+- **Deletion** destroys every version's material and marks the key deleted. It requires
+  `deletionAllowed: true` first:
+
+  ```ts
+  await crypto.keys.updatePolicy('media', { deletionAllowed: true })
+  await crypto.keys.delete('media')
+  ```
+
+- **Export** returns the private material (a base64url key, or a private JWK). It requires
+  `exportable: true` and the `crypto:keys:export` capability, and it is audited like any other
+  operation:
+
+  ```ts
+  await crypto.keys.updatePolicy('media', { exportable: true })
+  const { material } = await crypto.keys.export('media')
+  ```
+
+  Prefer not to export: a key that never leaves the server cannot leak from an app.
+
+## Metadata, never material
+
+Every read — the console, the CLI, the MCP tools, `keys.list` — returns metadata only: name, type,
+policy, and per version the status, `kid` and public JWK. The sealed material is not part of any
+view, and the audit trail never records it.

@@ -1,0 +1,104 @@
+{
+  "name": "@adonis-agora/crypto",
+  "version": "0.0.0",
+  "description": "A crypto server and in-process service for AdonisJS: named, versioned keys per app, encrypt/decrypt/rewrap/sign/hmac, data keys, audited over HTTP or in process \u2014 a small HashiCorp Vault Transit. Part of the Agora ecosystem.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DavideCarvalho/adonis-agora-crypto.git",
+    "directory": "packages/adonis"
+  },
+  "homepage": "https://davidecarvalho.github.io/agora/docs/crypto",
+  "bugs": {
+    "url": "https://github.com/DavideCarvalho/adonis-agora-crypto/issues"
+  },
+  "keywords": [
+    "adonisjs",
+    "adonis",
+    "crypto",
+    "kms",
+    "vault",
+    "encryption",
+    "agora"
+  ],
+  "author": "Davi Carvalho <davi@goflip.ai>",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js",
+      "default": "./dist/src/index.js"
+    },
+    "./services/main": {
+      "types": "./dist/services/main.d.ts",
+      "import": "./dist/services/main.js",
+      "default": "./dist/services/main.js"
+    },
+    "./crypto_provider": {
+      "types": "./dist/providers/crypto_provider.d.ts",
+      "import": "./dist/providers/crypto_provider.js",
+      "default": "./dist/providers/crypto_provider.js"
+    },
+    "./testing": {
+      "types": "./dist/src/testing/index.d.ts",
+      "import": "./dist/src/testing/index.js",
+      "default": "./dist/src/testing/index.js"
+    },
+    "./configure": {
+      "types": "./dist/configure.d.ts",
+      "import": "./dist/configure.js",
+      "default": "./dist/configure.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && pnpm run copy:stubs",
+    "copy:stubs": "rm -rf dist/stubs && mkdir -p dist/stubs && cp -r stubs/* dist/stubs/",
+    "prepack": "pnpm run build",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "check:agora-doctor": "node ../../scripts/check-agora-doctor.mjs .",
+    "check:crypto-kit": "node ../../scripts/check-crypto-kit.mjs ."
+  },
+  "dependencies": {
+    "@adonis-agora/crypto-client": "workspace:^",
+    "@adonis-agora/crypto-core": "workspace:^",
+    "@adonis-agora/filter": "^1.0.0-rc.5"
+  },
+  "peerDependencies": {
+    "@adonis-agora/authkit-client": ">=1.0.0-rc.7 <2.0.0",
+    "@adonisjs/core": "^7.3.0",
+    "@adonisjs/lucid": "^22.4.0"
+  },
+  "peerDependenciesMeta": {
+    "@adonisjs/lucid": {
+      "optional": true
+    },
+    "@adonis-agora/authkit-client": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@adonis-agora/authkit-client": "1.0.0-rc.7",
+    "@adonisjs/assembler": "8.6.0",
+    "@adonisjs/core": "7.6.0",
+    "@adonisjs/lucid": "22.4.2",
+    "@types/luxon": "3.7.6",
+    "@types/node": "26.6.6",
+    "better-sqlite3": "13.0.3",
+    "jose": "6.2.15",
+    "luxon": "3.7.2",
+    "typescript": "7.0.2",
+    "vitest": "5.1.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

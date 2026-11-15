@@ -1,0 +1,59 @@
+import { BaseSchema } from '@adonisjs/lucid/schema'
+
+/**
+ * The three tables @adonis-agora/crypto owns. The provider creates them at boot by default
+ * (`autoCreateSchema: true`); this migration is for teams that manage every table themselves.
+ */
+export default class extends BaseSchema {
+  async up() {
+    this.schema.createTable('crypto_keys', (table) => {
+      table.string('app', 128).notNullable()
+      table.string('name', 64).notNullable()
+      table.string('type', 24).notNullable()
+      table.text('description').nullable()
+      table.integer('latest_version').notNullable()
+      table.integer('min_decryption_version').notNullable()
+      table.integer('deletion_allowed').notNullable()
+      table.integer('exportable').notNullable()
+      table.string('created_at', 32).notNullable()
+      table.string('created_by', 255).notNullable()
+      table.string('updated_at', 32).nullable()
+      table.string('updated_by', 255).nullable()
+      table.string('deleted_at', 32).nullable()
+      table.primary(['app', 'name'])
+    })
+
+    this.schema.createTable('crypto_key_versions', (table) => {
+      table.string('app', 128).notNullable()
+      table.string('name', 64).notNullable()
+      table.integer('version').notNullable()
+      table.text('material').notNullable()
+      table.string('kid', 128).nullable()
+      table.text('public_key').nullable()
+      table.string('created_at', 32).notNullable()
+      table.string('created_by', 255).notNullable()
+      table.primary(['app', 'name', 'version'])
+    })
+
+    this.schema.createTable('crypto_audit', (table) => {
+      table.string('id', 36).notNullable().primary()
+      table.string('at', 32).notNullable()
+      table.string('app', 128).notNullable()
+      table.string('key_name', 64).nullable()
+      table.integer('version').nullable()
+      table.string('operation', 24).notNullable()
+      table.string('actor', 255).notNullable()
+      table.string('client_id', 255).nullable()
+      table.string('result', 16).notNullable()
+      table.text('error').nullable()
+      table.text('metadata').nullable()
+      table.index(['app', 'at'])
+    })
+  }
+
+  async down() {
+    this.schema.dropTable('crypto_audit')
+    this.schema.dropTable('crypto_key_versions')
+    this.schema.dropTable('crypto_keys')
+  }
+}

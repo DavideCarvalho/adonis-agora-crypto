@@ -1,0 +1,129 @@
+---
+title: Authentication
+description: One token contract for every Agora control plane — urn:agora:crypto, a partition and capabilities.
+icon: Fingerprint
+---
+
+A tenant presents a bearer token. The server verifies it and derives **the app and the
+capabilities from the token**, never from the request. This is the same contract as
+`@adonis-agora/durable`, `@adonis-agora/flags` and `@adonis-agora/config`: one authkit *service
+tenant* client can hold several resources.
+
+## With authkit
+
+Register the app in authkit as a service tenant (the `client_credentials` grant) for the resource
+`urn:agora:crypto`, with the scopes it needs:
+
+```
+resource: urn:agora:crypto
+scope: crypto:encrypt:media
+       crypto:decrypt:media
+       crypto:sign:webhooks
+       crypto:keys:read        # the console, the CLI, the audit trail
+```
+
+```ts title="config/crypto.ts (the server)"
+import { authkitTenantVerifier } from '@adonis-agora/authkit-client'
+import { defineConfig } from '@adonis-agora/crypto'
+
+export default defineConfig({
+  topology: 'control-plane',
+  verifyTenant: authkitTenantVerifier({
+    issuer: env.get('AUTHKIT_ISSUER'),
+    resource: 'urn:agora:crypto',
+  }),
+})
+```
+
+```ts title="config/crypto.ts (an app)"
+import { authkitTenantToken } from '@adonis-agora/authkit-client'
+
+export default defineConfig({
+  topology: 'tenant',
+  tenant: {
+    url: env.get('CRYPTO_URL'),
+    partition: 'streaming',
+    token: authkitTenantToken({
+      issuer: env.get('AUTHKIT_ISSUER'),
+      clientId: env.get('AUTHKIT_CLIENT_ID'),
+      clientSecret: env.get('AUTHKIT_CLIENT_SECRET'),
+      resource: 'urn:agora:crypto',
+    }),
+  },
+})
+```
+
+Tokens are verified locally against the issuer's JWKS, found through discovery
+(`/.well-known/openid-configuration` → `jwks_uri`). No hard-coded token URL, no call per request.
+authkit-server is never required in the server's process.
+
+## Without authkit
+
+One shared secret per app, compared in constant time. The app names itself with `x-crypto-app`; the
+secret proves it.
+
+```ts
+export default defineConfig({
+  topology: 'control-plane',
+  verifyTenant: sharedSecretVerifier({
+    partitions: {
+      streaming: {
+        secret: env.get('CRYPTO_SECRET_STREAMING'),
+        capabilities: ['crypto:encrypt:media', 'crypto:decrypt:media'],
+      },
+      // A string means the default: ['crypto:*'].
+      billing: env.get('CRYPTO_SECRET_BILLING'),
+    },
+  }),
+})
+```
+
+`sharedSecretVerifier` also accepts a `actor`, recorded in the audit trail when the credential is
+used by an automation (`actor: 'agent:7'`).
+
+## Capabilities
+
+| Capability | Grants |
+| --- | --- |
+| `crypto:encrypt:<key>` | `encrypt` on that key |
+| `crypto:decrypt:<key>` | `decrypt` on that key |
+| `crypto:rewrap:<key>` | `rewrap` (also needs `encrypt` and `decrypt` on it) |
+| `crypto:datakey:<key>` | `generateDataKey` (also needs `encrypt`/`decrypt`) |
+| `crypto:sign:<key>` | `sign` |
+| `crypto:verify:<key>` | `verify` |
+| `crypto:hmac:<key>` | `hmac` |
+| `crypto:keys:read` | list keys, read metadata and versions, audit trail, public keys |
+| `crypto:keys:manage` | create, rotate, change policy, delete |
+| `crypto:keys:export` | export an `exportable` key's material |
+
+`*` matches one segment, and a trailing `*` matches everything after it:
+
+| Written | Matches |
+| --- | --- |
+| `crypto:*` | everything |
+| `crypto:encrypt:*` | `encrypt` on every key |
+| `crypto:*:media` | every operation on `media` |
+
+Nothing is implied: `crypto:encrypt:media` cannot decrypt, and `crypto:keys:read` grants no
+operation.
+
+## Who is recorded
+
+The audit trail records `actor ?? clientId ?? partition`:
+
+- with authkit, a token exchange for a person carries `act` (RFC 8693) and the verifier reports that
+  `sub` as `actor`; a pure service client has none, so its `client_id` is recorded;
+- with a shared secret, the partition, or the `actor` you configured.
+
+Authorization always uses the token's own capabilities — never the actor's.
+
+## Refusals
+
+| Case | Status | Code |
+| --- | --- | --- |
+| no token, unknown secret, expired token | `401` | `unauthenticated` |
+| token without the capability for this key/operation | `403` | `forbidden` |
+| key does not exist in this app | `404` | `not_found` |
+
+A refused operation is audited (`result: 'denied'`) with the capability it was missing, so "who
+tried" is answerable after the fact.
