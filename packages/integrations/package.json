@@ -1,0 +1,97 @@
+{
+  "name": "@adonis-agora/crypto-integrations",
+  "version": "0.0.0",
+  "description": "Seams between @adonis-agora/crypto and the other Agora libs \u2014 KMS roots for authkit, agent and config, encrypted durable transport/control-plane, envelope fetch for flags and any service-to-service call. Kept at 0.x so the rc libs stay untouched.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DavideCarvalho/adonis-agora-crypto.git",
+    "directory": "packages/integrations"
+  },
+  "homepage": "https://davidecarvalho.github.io/agora/docs/crypto/integrations",
+  "bugs": {
+    "url": "https://github.com/DavideCarvalho/adonis-agora-crypto/issues"
+  },
+  "keywords": [
+    "adonisjs",
+    "adonis",
+    "crypto",
+    "integrations",
+    "kms",
+    "agora"
+  ],
+  "author": "Davi Carvalho <davi@goflip.ai>",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js",
+      "default": "./dist/src/index.js"
+    },
+    "./authkit": {
+      "types": "./dist/src/authkit.d.ts",
+      "import": "./dist/src/authkit.js",
+      "default": "./dist/src/authkit.js"
+    },
+    "./agent": {
+      "types": "./dist/src/agent.d.ts",
+      "import": "./dist/src/agent.js",
+      "default": "./dist/src/agent.js"
+    },
+    "./config": {
+      "types": "./dist/src/config.d.ts",
+      "import": "./dist/src/config.js",
+      "default": "./dist/src/config.js"
+    },
+    "./durable": {
+      "types": "./dist/src/durable.d.ts",
+      "import": "./dist/src/durable.js",
+      "default": "./dist/src/durable.js"
+    },
+    "./flags": {
+      "types": "./dist/src/flags.d.ts",
+      "import": "./dist/src/flags.js",
+      "default": "./dist/src/flags.js"
+    },
+    "./http": {
+      "types": "./dist/src/http.d.ts",
+      "import": "./dist/src/http.js",
+      "default": "./dist/src/http.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "pnpm run build",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@adonis-agora/crypto": "workspace:^",
+    "@adonis-agora/crypto-client": "workspace:^",
+    "@adonis-agora/crypto-core": "workspace:^"
+  },
+  "peerDependencies": {
+    "@adonis-agora/durable": ">=1.0.0-rc.0 <2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@adonis-agora/durable": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "typescript": "7.0.2",
+    "vitest": "5.1.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
