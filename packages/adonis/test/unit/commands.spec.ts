@@ -8,6 +8,7 @@ import {
   CryptoKeysDelete,
   CryptoKeysList,
   CryptoKeysPolicy,
+  CryptoKeysPublicKey,
   CryptoKeysRotate,
   CryptoKeysShow,
 } from '../../commands/keys.js';
@@ -105,6 +106,18 @@ describe('commands', () => {
     const shown = await run(CryptoKeysShow as never, ['media', '--application', 'shop', '--json']);
     expect(shown.json().versions).toHaveLength(2);
     expect(shown.json().versions[0]).toMatchObject({ status: 'retired' });
+  });
+
+  it('prints the public JWK of an asymmetric key, or every version as a JWKS', async () => {
+    await run(CryptoKeysCreate as never, ['inbox', '--type', 'x25519', '--application', 'shop']);
+    await run(CryptoKeysPublicKey as never, ['inbox', '--application', 'shop']);
+    const parsed = JSON.parse(writes.join('')) as { crv: string; x: string; kid: string };
+    expect(parsed.crv).toBe('X25519');
+    expect(parsed.kid).toBeTypeOf('string');
+
+    await run(CryptoKeysRotate as never, ['inbox', '--application', 'shop']);
+    await run(CryptoKeysPublicKey as never, ['inbox', '--application', 'shop', '--jwks']);
+    expect((JSON.parse(writes.join('')) as { keys: unknown[] }).keys).toHaveLength(2);
   });
 
   it('refuses an unknown type before touching the store', async () => {

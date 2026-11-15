@@ -118,6 +118,14 @@ export type {
 } from './doctor/agora_doctor.js';
 export { agoraDoctorChecks } from './doctor/checks.js';
 export { CryptoApi, type CryptoApiOptions, cryptoCsrfExceptions } from './http/api.js';
+export {
+  type CryptoEnvelopeMiddlewareOptions,
+  type CryptoEnvelopeReplyOptions,
+  type CryptoEnvelopeState,
+  cryptoEnvelopeMiddleware,
+  cryptoEnvelopeReply,
+  serviceCipher,
+} from './http/envelope.js';
 export type { CryptoOperations } from './operations.js';
 export { localOperations, remoteOperations } from './operations.js';
 export type { CryptoRuntime, CryptoStatus } from './runtime.js';

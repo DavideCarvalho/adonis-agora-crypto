@@ -55,13 +55,21 @@ export function serve(
       };
       const headerValue = (name: string) =>
         (req.headers[name.toLowerCase()] as string | undefined) ?? undefined;
+      // `updateBody` mirrors Adonis' Request: middleware that decrypts a payload replaces what
+      // `body()`/`all()` (and so `validateUsing`) read.
+      const query = Object.fromEntries(url.searchParams);
+      let body = raw ? JSON.parse(raw) : {};
       const ctx = {
         params,
         request: {
           header: headerValue,
           headers: () => req.headers as Record<string, string | string[] | undefined>,
-          body: () => (raw ? JSON.parse(raw) : {}),
-          qs: () => Object.fromEntries(url.searchParams),
+          body: () => body,
+          all: () => ({ ...body, ...query }),
+          qs: () => query,
+          updateBody: (next: unknown) => {
+            body = next;
+          },
           request: req,
         },
         response,
