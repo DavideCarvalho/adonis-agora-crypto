@@ -51,6 +51,21 @@ export function brokerTransport(driver: BrokerDriver, timeoutMs = 10_000): Crypt
   };
 }
 
+/** Whether a configured value is a broker driver (it can `request`/`serve`) rather than a transport. */
+export function isBrokerDriver(value: CryptoTransport | BrokerDriver): value is BrokerDriver {
+  const candidate = value as Partial<BrokerDriver>;
+  return typeof candidate.request === 'function' && typeof candidate.serve === 'function';
+}
+
+/**
+ * Accepts what `transports.*` hands back on a tenant: the HTTP driver is already a `CryptoTransport`,
+ * every other driver is a broker and gets the shared envelope adapter. `tenant.transport` takes either,
+ * so `transport: transports.redis({ connection })` and `transport: transports.http({ url })` both work.
+ */
+export function asCryptoTransport(value: CryptoTransport | BrokerDriver): CryptoTransport {
+  return isBrokerDriver(value) ? brokerTransport(value) : value;
+}
+
 /**
  * Runs the control plane side of a broker: verify, dedupe, run, answer; poison messages go to the
  * driver's dead-letter instead of being retried forever.

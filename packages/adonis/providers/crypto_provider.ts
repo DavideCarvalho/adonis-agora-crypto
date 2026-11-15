@@ -33,7 +33,7 @@ import { setRuntime } from '../src/services/accessor.js';
 import { inSchema, type SqlDatabase } from '../src/sql.js';
 import type { CryptoStore } from '../src/store/store.js';
 import { resolveTenantVerifier } from '../src/topology/verify.js';
-import { serveBroker } from '../src/transports/broker.js';
+import { asCryptoTransport, serveBroker } from '../src/transports/broker.js';
 import { createCryptoRpc } from '../src/transports/rpc.js';
 
 declare module '@adonisjs/core/types' {
@@ -102,7 +102,9 @@ export default class CryptoProvider {
       ...(config.tenant.timeoutMs !== undefined ? { timeoutMs: config.tenant.timeoutMs } : {}),
       ...(config.tenant.retries !== undefined ? { retries: config.tenant.retries } : {}),
     });
-    const transport = config.tenant.transport;
+    const transport = config.tenant.transport
+      ? asCryptoTransport(config.tenant.transport)
+      : undefined;
     const operations = transport
       ? transportOperations(transport, config.tenant.token)
       : remoteOperations(client);
@@ -172,8 +174,9 @@ export default class CryptoProvider {
     });
     const partition = config.topology === 'standalone' ? (config.app ?? '') : '';
     let api: CryptoApi | undefined;
+    let verifyTenant: Awaited<ReturnType<typeof resolveTenantVerifier>> | undefined;
     if (config.topology === 'control-plane') {
-      const verifyTenant = await resolveTenantVerifier(config.verifyTenant);
+      verifyTenant = await resolveTenantVerifier(config.verifyTenant);
       api = new CryptoApi({
         service,
         verifyTenant,
@@ -193,6 +196,7 @@ export default class CryptoProvider {
       store,
       service,
       ...(api !== undefined ? { api } : {}),
+      ...(verifyTenant !== undefined ? { verifyTenant } : {}),
       operations,
       operationsFor: (app, actor) =>
         localOperations(service, { partition: app, capabilities: ['crypto:*'], actor }),
@@ -208,8 +212,7 @@ export default class CryptoProvider {
     logger.info(
       `[@adonis-agora/crypto] ${config.topology ?? 'standalone'}${api ? ` at ${api.prefix}/v1` : ''}`,
     );
-    if (api && config.topology === 'control-plane' && config.transport) {
-      const verifyTenant = await resolveTenantVerifier(config.verifyTenant);
+    if (api && verifyTenant && config.topology === 'control-plane' && config.transport) {
       await this.app.booted(async () => {
         runtime.stopTransport = await serveBroker(
           config.transport!,

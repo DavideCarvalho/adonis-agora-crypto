@@ -107,10 +107,11 @@ export interface TenantTopologyConfig extends BaseConfig {
     /** Check the token against the server at boot (a warning when it fails). Default `true`. */
     checkOnBoot?: boolean;
     /**
-     * How this app reaches the control plane. Default `transports.http({ url })`. A broker driver
-     * (`transports.redis({ connection })`) carries the same envelope, with a documented latency.
+     * How this app reaches the control plane. Default `transports.http({ url })`. Any driver from
+     * `transports` works — a broker (`transports.redis(...)`, `transports.durable(...)`) is adapted
+     * with the shared envelope, with a documented latency.
      */
-    transport?: CryptoTransport;
+    transport?: CryptoTransport | BrokerDriver;
   };
   /** FORBIDDEN on a tenant: it holds no keys; the server does. */
   store?: never;
