@@ -198,6 +198,11 @@ jobs:
           publish-script: pnpm release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Set but EMPTY, on purpose: changesets treats a missing token as "nothing to authenticate
+          # with" and skips the OIDC exchange entirely. An empty variable makes npm fall back to the
+          # GitHub OIDC token (id-token: write above), which is what trusted publishing needs. The
+          # same fix was needed in the config repo's release.
+          NODE_AUTH_TOKEN: ''
 
   snapshot:
     name: Publish beta snapshot to npm
@@ -234,3 +239,5 @@ jobs:
 
       - name: Publish beta snapshot
         run: pnpm changeset publish --tag beta --no-git-tag
+        env:
+          NODE_AUTH_TOKEN: ''
