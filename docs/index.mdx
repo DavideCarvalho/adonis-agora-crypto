@@ -1,0 +1,81 @@
+---
+title: Crypto
+description: One crypto server for every AdonisJS app — named, versioned keys, encrypt/decrypt/sign over HTTP or in process, and a KMS root other libs can use.
+icon: KeyRound
+---
+
+`@adonis-agora/crypto` is a small KMS in the shape of HashiCorp Vault Transit. One app — the
+**server** — owns named, versioned keys. Every other app is a **tenant**: it asks the server to
+encrypt, decrypt, rewrap, sign, verify, hmac or generate a data key, and never holds key material
+itself. An app without a server runs the same API in process.
+
+```sh
+node ace add @adonis-agora/crypto
+```
+
+```ts title="config/crypto.ts (the server)"
+import { defineConfig, sharedSecretVerifier } from '@adonis-agora/crypto'
+
+export default defineConfig({
+  topology: 'control-plane',
+  verifyTenant: sharedSecretVerifier({
+    partitions: {
+      // What this app may do. `crypto:*` is the wide default of a shared secret.
+      streaming: {
+        secret: env.get('CRYPTO_SECRET_STREAMING'),
+        capabilities: ['crypto:encrypt:media', 'crypto:decrypt:media'],
+      },
+    },
+  }),
+})
+```
+
+```ts title="config/crypto.ts (an app)"
+import { defineConfig } from '@adonis-agora/crypto'
+
+export default defineConfig({
+  topology: 'tenant',
+  tenant: {
+    url: env.get('CRYPTO_URL'),         // https://crypto.example.com/_crypto
+    partition: 'streaming',
+    token: env.get('CRYPTO_TOKEN'),
+  },
+})
+```
+
+```ts title="anywhere in the app"
+import crypto from '@adonis-agora/crypto/services/main'
+
+const { ciphertext, version } = await crypto.encrypt({ key: 'media', plaintext: url })
+const { plaintext } = await crypto.decrypt({ key: 'media', ciphertext })
+```
+
+Same calls on a standalone app, a control plane and a tenant: the difference is one config value.
+
+## What it gives you
+
+- **Named keys per app** (the partition), typed `aes256-gcm`, `x25519`, `ed25519` or `hmac-sha256`.
+- **Versions**: `rotate` adds a version; ciphertext names the version that sealed it, so old data
+  keeps opening down to `minDecryptionVersion`. Retiring a version is a policy change, not a migration.
+- **Operations**: encrypt, decrypt, rewrap (re-encrypt with the latest version without returning the
+  plaintext), generate a data key (envelope: plaintext + wrapped, or wrapped only), sign, verify,
+  hmac, public key / JWKS for asymmetric keys, and batch variants.
+- **Key material at rest is never plain**: sealed with the Agora crypto kit, rooted in the app's
+  encryption service by default, or in a cloud KMS through a `KmsAdapter`.
+- **Capabilities from the token**, per key and per operation: `crypto:encrypt:<key>`,
+  `crypto:decrypt:<key>`, `crypto:sign:<key>`, `crypto:keys:read`, `crypto:keys:manage`,
+  `crypto:keys:export`, with `*` wildcards. The app comes from the token, never from the request.
+- **An audit trail** of every key operation: who, app, key, version, operation, result — never the
+  plaintext or the key material.
+- **A KMS root for the whole ecosystem**: `cryptoServerKms({ client, key })` plugs straight into the
+  crypto kit, so `@adonis-agora/config`, authkit and agent can keep their secrets wrapped by this
+  server with no key in the app.
+
+## Where to go next
+
+- [Getting started](/docs/crypto/getting-started) — install it, pick a store, create a key.
+- [Keys](/docs/crypto/keys) — types, versions, rotation, deletion, export.
+- [Operations](/docs/crypto/operations) — every call, over HTTP and in process.
+- [Authentication](/docs/crypto/authentication) — the token contract and the capability vocabulary.
+- [Deployment topologies](/docs/crypto/deployment) — standalone, control plane, tenant.
+- [KMS](/docs/crypto/kms) — use this server as another lib's KMS root.

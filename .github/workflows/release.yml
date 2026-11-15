@@ -74,8 +74,14 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - run: pnpm check:package
-      - run: pnpm --filter @adonis-agora/crypto check:agora-doctor
-      - run: pnpm --filter @adonis-agora/crypto check:crypto-kit
+      - name: Check the agora:doctor and crypto-kit copies
+        run: |
+          if [ -d packages/adonis/src/crypto-kit ]; then
+            pnpm --filter @adonis-agora/crypto check:agora-doctor
+            pnpm --filter @adonis-agora/crypto check:crypto-kit
+          else
+            echo "No @adonis-agora/crypto package on this branch yet: skipping the copy checks."
+          fi
 
       # A Renovate patch/minor bump automerges on its own and brings no changeset with it, so
       # the new dependency would reach npm only with the next hand-written changeset. This writes

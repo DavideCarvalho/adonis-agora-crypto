@@ -1,0 +1,66 @@
+{
+  "name": "@adonis-agora/crypto-client",
+  "version": "0.0.0",
+  "description": "Remote-safe client for an @adonis-agora/crypto server: every operation, a shared secret or authkit token, retries and timeouts, plus the KMS adapter and remote signer other Agora libs use.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DavideCarvalho/adonis-agora-crypto.git",
+    "directory": "packages/client"
+  },
+  "homepage": "https://davidecarvalho.github.io/agora/docs/crypto",
+  "bugs": {
+    "url": "https://github.com/DavideCarvalho/adonis-agora-crypto/issues"
+  },
+  "keywords": [
+    "adonisjs",
+    "adonis",
+    "crypto",
+    "crypto-client",
+    "kms",
+    "agora"
+  ],
+  "author": "Davi Carvalho <davi@goflip.ai>",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "pnpm run build",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@adonis-agora/crypto-core": "workspace:^"
+  },
+  "peerDependencies": {
+    "@adonis-agora/authkit-client": ">=1.0.0-rc.7 <2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@adonis-agora/authkit-client": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@adonis-agora/authkit-client": "1.0.0-rc.7",
+    "@types/node": "26.6.6",
+    "typescript": "7.0.2",
+    "vitest": "5.1.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

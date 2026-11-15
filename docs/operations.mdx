@@ -1,0 +1,129 @@
+---
+title: Operations
+description: Encrypt, decrypt, rewrap, data keys, sign, verify, hmac, public keys and batches — over HTTP and in process.
+icon: Binary
+---
+
+Every operation has one name and one shape, over HTTP and in process. The examples below use the
+service; the HTTP wire is one `POST /_crypto/v1/<operation>` with the same JSON body.
+
+```ts
+import crypto from '@adonis-agora/crypto/services/main'
+```
+
+## encrypt / decrypt
+
+```ts
+const { ciphertext, key, version } = await crypto.encrypt({
+  key: 'media',
+  plaintext: 'https://cdn/x.mp4',
+  aad: 'media:42',        // optional; the same string must reach decrypt
+})
+
+const { plaintext } = await crypto.decrypt({ key: 'media', ciphertext, aad: 'media:42' })
+```
+
+- `plaintext` is a string (up to 64 KiB). Binary? base64 it yourself, or use a data key.
+- `aad` binds the ciphertext to a place (a row id, a user). A different `aad` does not open.
+- `version` on `encrypt` writes with a specific version (an older one that is still allowed).
+- What comes back is `agora:ct1:<key>:<version>:…` for `aes256-gcm`, `agora:pk1:<kid>:…` for
+  `x25519`. Treat it as opaque.
+
+A tampered ciphertext, a wrong `aad` or a retired version is a `400` with
+`{ error, code: 'invalid' }` — never a partially decrypted value.
+
+## rewrap
+
+Re-encrypts a ciphertext with the current version, **without returning the plaintext**:
+
+```ts
+const { ciphertext: fresh, version } = await crypto.rewrap({ key: 'media', ciphertext })
+```
+
+Use it after a rotation to move old rows, and as the "migrate slowly" tool: the value stays readable
+the whole time.
+
+## Data keys (envelope encryption)
+
+For large payloads or another library's envelope encryption:
+
+```ts
+// Plaintext data key plus the wrapped one (store the wrapped, encrypt locally with the plaintext).
+const { plaintext, wrapped, version } = await crypto.generateDataKey({ key: 'root' })
+
+// Wrapped only: the caller never sees the data key.
+const { wrapped: sealed } = await crypto.generateDataKey({ key: 'root', plaintext: false })
+```
+
+`wrapped` is an ordinary ciphertext of the named key, so `decrypt({ key: 'root', ciphertext: wrapped })`
+returns the data key later — the same operation a `KmsAdapter` uses. See [KMS](/docs/crypto/kms).
+
+## sign / verify
+
+```ts
+const { signature, kid } = await crypto.sign({ key: 'webhooks', message: body })
+const { valid } = await crypto.verify({ key: 'webhooks', message: body, signature })
+```
+
+- `message` is utf8 by default; pass `encoding: 'base64url'` for raw bytes.
+- `signature` is `agora:sig1:<kid>:<signature>`, verifiable with the crypto kit's `verify()` and the
+  key's public JWK.
+- `verify` answers `{ valid }` and never throws for a bad signature. It accepts every version's
+  public key, so a rotation does not invalidate signatures made before it.
+
+## hmac
+
+```ts
+const { hmac } = await crypto.hmac({ key: 'session', message: token })
+```
+
+base64url HMAC-SHA256 with the latest version of an `hmac-sha256` key.
+
+## Public keys and JWKS
+
+```ts
+const { kid, jwk, jwks } = await crypto.keys.publicKey('inbox')   // X25519: seal to it
+const all = await crypto.jwks('webhooks')                          // every version, newest first
+```
+
+A caller can seal with the public JWK through the crypto kit:
+
+```ts
+import { sealTo } from '@adonis-agora/crypto/…' // or the app's own crypto-kit copy
+const sealed = sealTo(jwk, 'only the server opens this')
+```
+
+## Batches
+
+`encrypt`, `decrypt`, `sign` and `verify` have batch variants (at most 100 items). Answers are in
+input order; a failing item fails the call with its index:
+
+```ts
+const { results } = await client.encryptBatch([
+  { key: 'media', plaintext: a },
+  { key: 'media', plaintext: b },
+])
+```
+
+## The HTTP wire
+
+| Call | Wire |
+| --- | --- |
+| encrypt | `POST /_crypto/v1/encrypt` |
+| decrypt | `POST /_crypto/v1/decrypt` |
+| rewrap | `POST /_crypto/v1/rewrap` |
+| data key | `POST /_crypto/v1/datakeys` |
+| sign / verify | `POST /_crypto/v1/sign`, `POST /_crypto/v1/verify` |
+| hmac | `POST /_crypto/v1/hmac` |
+| batches | `POST /_crypto/v1/{encrypt,decrypt,sign,verify}/batch` |
+| keys | `GET/POST /_crypto/v1/keys`, `GET/PATCH/DELETE /_crypto/v1/keys/:name` |
+| rotate | `POST /_crypto/v1/keys/:name/rotate` |
+| public key / JWKS | `GET /_crypto/v1/keys/:name/public`, `GET /_crypto/v1/keys/:name/jwks` |
+| export | `GET /_crypto/v1/keys/:name/export?version=` |
+| audit | `GET /_crypto/v1/audit` |
+| identity | `GET /_crypto/v1/whoami` |
+
+List endpoints follow the Agora list wire format: `page`, `size`, `sort=-createdAt`,
+`filter[operation]=encrypt`, and answer `{ data, meta }`. A refusal is `{ error, code }` with a
+status that means something: `401` unauthenticated, `403` forbidden, `404` not found, `400` invalid,
+`409` conflict, `413` too large.
