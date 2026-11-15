@@ -15,6 +15,7 @@
     "transport",
     "sharing",
     "integrations",
-    "react"
+    "react",
+    "performance"
   ]
 }
