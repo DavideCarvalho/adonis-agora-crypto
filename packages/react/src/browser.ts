@@ -121,6 +121,37 @@ export function sealTo(recipient: PublicJwk, value: string, options: SealOptions
   ].join(':')}`;
 }
 
+/** What an open produced, for the app's own audit: the value and which `kid` opened it. */
+export interface OpenedShare<T = string> {
+  value: T;
+  /** The key version that opened the share (from the `agora:pk1` header). */
+  kid: string;
+  /** ISO timestamp of the open, to emit with the app's `crypto:sealed.open` event. */
+  at: string;
+}
+
+/** The `kid` an `agora:pk1` value names, without opening it (for a grant list, a UI hint). */
+export function sealedKid(sealed: string): string | undefined {
+  if (typeof sealed !== 'string' || !sealed.startsWith(SEALED_TO_PREFIX)) return undefined;
+  const kid = sealed.slice(SEALED_TO_PREFIX.length).split(':')[0];
+  return kid && KID.test(kid) ? kid : undefined;
+}
+
+/**
+ * Opens a share and returns what the app needs to audit it: the value, the `kid` used and the
+ * timestamp. Pair it with `sealedOpenEvent(...)` from `@adonis-agora/crypto-integrations` (which
+ * normalizes `actor ?? sub`) so the event matches the crypto server's audit identity.
+ */
+export function openWithAudit(
+  privateKey: PublicJwk & { d?: string },
+  sealed: string,
+  options: SealOptions = {},
+): OpenedShare {
+  const kid = sealedKid(sealed);
+  if (kid === undefined) throw new Error('crypto: not an agora:pk1 value');
+  return { value: openWith(privateKey, sealed, options), kid, at: new Date().toISOString() };
+}
+
 /** Opens a {@link sealTo} value with the private key whose `kid` it names. */
 export function openWith(
   privateKey: PublicJwk & { d?: string },

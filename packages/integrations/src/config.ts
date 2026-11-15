@@ -10,6 +10,18 @@ export const CONFIG_ROOT_KEY = ROOT_KEYS.config;
 export const CONFIG_PACKAGE = '@adonis-agora/config';
 
 /**
+ * The recipient-held open event, re-exported here because it is config that emits it:
+ * `config:sealed.open` in the product's bus, carrying `actor ?? sub`, the key and the `kid`.
+ */
+export {
+  SEALED_OPEN_EVENT,
+  type SealedOpenActor,
+  type SealedOpenEvent,
+  type SealedOpenEventInput,
+  sealedOpenEvent,
+} from './audit.js';
+
+/**
  * The KMS root for `@adonis-agora/config`:
  *
  * ```ts title="config/config.ts"

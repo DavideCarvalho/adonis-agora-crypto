@@ -1,4 +1,11 @@
 export {
+  SEALED_OPEN_EVENT,
+  type SealedOpenActor,
+  type SealedOpenEvent,
+  type SealedOpenEventInput,
+  sealedOpenEvent,
+} from './audit.js';
+export {
   type ControlPlaneLike,
   type DurableEncryptionOptions,
   encryptedControlPlane,

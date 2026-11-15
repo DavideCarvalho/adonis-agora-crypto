@@ -200,6 +200,13 @@ validate it without knowing crypto; a rotation keeps old references opening (`ke
 root during the window). Works with the server embedded (`{ service, partition }`) or remote
 (`{ client }`), and every seal/open is audited by the crypto server.
 
+## Auditing a recipient-held open
+
+Server-held opens are audited by the crypto server. A `sealTo` share is opened on the recipient's
+device, so the app emits `crypto:sealed.open` with `sealedOpenEvent({ actor, subject, key, kid,
+resource })`: `actor ?? sub` (the crypto audit's own rule), the `kid` that opened it and a timestamp.
+`openWithAudit()` in `@adonis-agora/crypto-react` returns the value plus `kid`/`at` for that event.
+
 ## Seams still missing in the rc libs
 
 These would make an integration cleaner, but are **not** changed today:

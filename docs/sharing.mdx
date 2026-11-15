@@ -92,6 +92,48 @@ For server-held, pass `context` on the decrypt (`user:42`, `grant:7`) and the au
 what". For recipient-held there is no server-side trace at all: if the business needs "who viewed this
 exam", the app must emit the event.
 
+The event shape is the same everywhere, so Telescope shows one identity in both models:
+
+```ts
+import { SEALED_OPEN_EVENT, sealedOpenEvent } from '@adonis-agora/crypto-integrations/config'
+import { openWithAudit } from '@adonis-agora/crypto-react'
+
+const opened = openWithAudit(identity.privateKey, grant.shared, { aad: `grant:${grant.id}` })
+emitter.emit(
+  SEALED_OPEN_EVENT,
+  sealedOpenEvent({
+    actor: ctx.identity.actor,          // RFC 8693 `act`, when an agent acts for a person
+    subject: ctx.identity.sub,
+    key: 'doctor-42',
+    kid: opened.kid,
+    resource: `grant:${grant.id}`,
+    at: opened.at,
+  }),
+)
+```
+
+```json
+{
+  "event": "crypto:sealed.open",
+  "v": 1,
+  "actor": "user:42",
+  "subject": "svc:agent",
+  "key": "doctor-42",
+  "kid": "LqFIiDUU…",
+  "resource": "grant:7",
+  "at": "2026-03-03T03:03:03.000Z",
+  "result": "ok"
+}
+```
+
+- `actor` is `actor ?? sub`, the same rule as the crypto server's audit — an agent opening a share for a
+  doctor shows the doctor, with `subject` keeping the client that ran it.
+- `kid` is the key version that opened it (from the `agora:pk1` header), so a rotation is visible.
+- `result: 'error'` for a refused/failed open; an open with no identity at all throws instead of
+  emitting an anonymous row.
+- Config emits it as `config:sealed.open` and also calls `tenant.onSealedOpen(event)`, both with this
+  payload.
+
 ## Why not just a shared symmetric key?
 
 A symmetric share means the server, every backup and every admin can open it, and revoking means

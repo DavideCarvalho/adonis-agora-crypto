@@ -4,7 +4,15 @@ import {
   openWith as kitOpenWith,
   sealTo as kitSealTo,
 } from '../../adonis/src/crypto-kit/index.js';
-import { generateKeyPair, jwkThumbprint, openWith, publicJwk, sealTo } from '../src/browser.js';
+import {
+  generateKeyPair,
+  jwkThumbprint,
+  openWith,
+  openWithAudit,
+  publicJwk,
+  sealedKid,
+  sealTo,
+} from '../src/browser.js';
 import { openBrowserIdentity, sealBrowserIdentity } from '../src/identity.js';
 
 describe('browser X25519, byte-compatible with the kit', () => {
@@ -46,6 +54,20 @@ describe('browser X25519, byte-compatible with the kit', () => {
     expect(openWith(browser.privateKey, sealedByKit)).toBe('hello');
     const sealedByBrowser = sealTo(browser.publicKey, 'hi');
     expect(kitOpenWith(browser.privateKey, sealedByBrowser)).toBe('hi');
+  });
+});
+
+describe('audited open', () => {
+  it('returns the value, the kid and a timestamp for the app’s sealed-open event', () => {
+    const pair = generateKeyPair();
+    const sealed = sealTo(pair.publicKey, '{"examId":7}', { aad: 'grant:7' });
+    const opened = openWithAudit(pair.privateKey, sealed, { aad: 'grant:7' });
+    expect(opened.value).toBe('{"examId":7}');
+    expect(opened.kid).toBe(pair.publicKey.kid);
+    expect(Number.isNaN(Date.parse(opened.at))).toBe(false);
+    expect(sealedKid(sealed)).toBe(pair.publicKey.kid);
+    expect(sealedKid('not-a-share')).toBeUndefined();
+    expect(() => openWithAudit(pair.privateKey, 'not-a-share')).toThrow(/agora:pk1/);
   });
 });
 
