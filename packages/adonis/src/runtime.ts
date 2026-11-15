@@ -3,6 +3,7 @@ import type { CryptoService } from './crypto/service.js';
 import type { CryptoApi } from './http/api.js';
 import type { CryptoOperations } from './operations.js';
 import type { CryptoStore } from './store/store.js';
+import type { TenantVerifier } from './topology/verify.js';
 
 /** What a tenant loaded: who it is and what its token may do. */
 export interface CryptoStatus {
@@ -32,6 +33,8 @@ export interface CryptoRuntime {
   operations: CryptoOperations;
   /** Set when the control plane consumes a broker: shuts its consumer down. */
   stopTransport?: () => Promise<void>;
+  /** The control plane's tenant verifier, so an out-of-band channel (durable workflow) can use it. */
+  verifyTenant?: TenantVerifier;
   /**
    * The operations of one app, as one actor: a server builds them for the named partition (the
    * console, the CLI), a tenant ignores both (its token decides). Used by the ops commands.

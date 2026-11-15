@@ -1,8 +1,10 @@
 ---
 title: Transports
-description: How a tenant reaches the control plane — HTTP by default, Redis as the first broker driver, and what every driver guarantees.
+description: How a tenant reaches the control plane — HTTP by default, Redis, BullMQ, the Adonis queue or a durable workflow, and what every driver guarantees.
 icon: Waypoints
 ---
+
+import { Callout } from 'fumadocs-ui/components/callout';
 
 A tenant talks to the control plane over a **transport**. HTTP is the default: an app that
 configures nothing behaves exactly as before. A broker driver changes only that server-to-server
@@ -51,6 +53,7 @@ That also means the broker never replaces the API: it is an extra consumer next 
 | `transports.redis({ connection, prefix?, timeoutMs? })` | request on `<prefix>:requests`, reply on `<prefix>:reply:<id>` | `@adonisjs/redis` (or any ioredis-shaped connection) |
 | `transports.bullmq({ connection, queueName?, prefix?, timeoutMs? })` | native reply: `job.waitUntilFinished(queueEvents)` returns the worker's result | `bullmq` (loaded lazily) |
 | `transports.queue({ connection, dispatch, consume, prefix?, timeoutMs? })` | request via `@adonisjs/queue`, reply on Redis (`<prefix>:reply:<id>`) — the queue has no await-result | `@adonisjs/queue` |
+| `transports.durable({ engine \| gateway, workflow?, timeoutMs? })` | native reply: `start('crypto.call', …)` resolves with the run result | `@adonis-agora/durable` (injected) |
 
 Both carry the same envelope (`v`, `id`, `operation`, `input`, `token`, `issuedAt`), so switching
 drivers is a config change, not a code change.
@@ -65,10 +68,65 @@ drivers is a config change, not a code change.
   reply on the queue adapter's Redis (`<prefix>:reply:<id>`, the same contract as the Redis driver).
   The app supplies its job's `dispatch` and its worker's consumer (`consume`), so the job is just a
   carrier for the envelope.
-- **durable** is the next driver: its transport is task dispatch to workers (`dispatch` + `onResult`),
-  so a call needs the control plane to run a durable worker for the crypto handler and the tenant to
-  dispatch a task; the reply is the step result. That is an app-level integration, documented rather
-  than faked.
+- **durable** also has a reply built in, at the run level: `start()` resolves with the run's result.
+  `transports.durable` passes the envelope as the workflow's input and takes `run.output` as the reply,
+  so the answer comes back on the same line — no reply queue, no polling. A run that fails surfaces as
+  `TransportError('unavailable')`; a run that never settles is a timeout.
+
+## Durable as the call channel
+
+When the tenant already runs `@adonis-agora/durable`, the crypto call can ride it. The tenant starts a
+workflow; the control plane runs it; the tenant gets the result back from the same `start()` call.
+
+```ts title="config/crypto.ts (the tenant)"
+// The role-agnostic durable gateway: store-backed on a standalone/control-plane pod, a round-trip
+// proxy on a store-less `role: 'tenant'` pod. Both resolve `start()` with the run result.
+import { runGateway } from '@adonis-agora/durable/services/main'
+import { defineConfig, transports } from '@adonis-agora/crypto'
+
+export default defineConfig({
+  topology: 'tenant',
+  tenant: {
+    url: env.get('CRYPTO_URL'),
+    partition: 'streaming',
+    token,
+    transport: transports.durable({
+      gateway: () => runGateway,
+      timeoutMs: 15_000,
+    }),
+  },
+})
+```
+
+A pod that owns a store can pass the engine instead — `engine: () => engine` from the same module
+(default export); both forms take `(workflow, input, runId)` and resolve with the run result.
+
+On the control plane there is nothing to configure beyond the workflow itself: the engine runs it, and
+the body is `handleTransportCall` — the same verify → dedupe → run path as `POST /_crypto/v1/transport`
+and `serveBroker`.
+
+```ts title="app/workflows/crypto_call_workflow.ts (the control plane)"
+import { BaseWorkflow, type WorkflowCtx } from '@adonis-agora/durable'
+import { handleTransportCall } from '@adonis-agora/crypto'
+
+export default class CryptoCallWorkflow extends BaseWorkflow {
+  static workflow = { name: 'crypto.call', version: '1' }
+
+  async run(ctx: WorkflowCtx, input: unknown) {
+    // `localStep` is what makes it replay-safe: the operation runs once per run and a replay returns
+    // the checkpointed reply instead of re-running it. The envelope id is the second guard (dedupe).
+    return ctx.localStep('crypto.call', () => handleTransportCall(input))
+  }
+}
+```
+
+<Callout type="warn">
+`handleTransportCall` needs `verifyTenant` — configure it on the control plane like any other server.
+It refuses to run on a tenant (`topology: 'tenant'` has no service and no verifier).
+</Callout>
+
+The workflow is registered by name (`crypto.call`), so the server does not need `transport` in its
+config for this driver: no broker is consumed, the engine is the consumer.
 
 ## What every driver guarantees
 
@@ -94,3 +152,8 @@ milliseconds when the broker is remote, **on top of** the operation. A crypto op
 that on every request, so keep HTTP for latency-sensitive paths and use a broker when the crypto
 server must not expose a public endpoint (or the call must survive a restart of the caller). Batch
 where the API allows it (`encryptBatch`) to amortise the hop.
+
+Durable is the slowest of the four: a call is a workflow turn (dispatch, execute, checkpoint, reply),
+so budget hundreds of milliseconds to seconds and give it its own `timeoutMs` (default 15s). It pays
+off when the operation must be durable — retried by a worker, auditable as a run, survivable across a
+restart of both sides — not when it is on a request's hot path.

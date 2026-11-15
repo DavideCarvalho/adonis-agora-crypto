@@ -160,3 +160,20 @@ export {
   type TenantVerifierObject,
   type VerifiedTenant,
 } from './topology/verify.js';
+export {
+  asCryptoTransport,
+  type BrokerDriver,
+  brokerTransport,
+  isBrokerDriver,
+  serveBroker,
+} from './transports/broker.js';
+export { type HandleTransportCallOptions, handleTransportCall } from './transports/call.js';
+export {
+  type DurableEngineLike,
+  type DurableGatewayLike,
+  type DurableRunResult,
+  type DurableStarter,
+  type DurableTransportOptions,
+  durableTransport,
+} from './transports/durable.js';
+export { type Transports, transports } from './transports/index.js';
