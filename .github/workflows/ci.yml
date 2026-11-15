@@ -52,6 +52,24 @@ jobs:
       matrix:
         node: [24, 26]
     name: test (node ${{ matrix.node }})
+    # The `schema` option is only exercised against a real Postgres (test/unit/postgres_schema.spec.ts);
+    # the file skips itself when CRYPTO_TEST_PG_URL is absent, so a local run needs no container.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      CRYPTO_TEST_PG_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@v7.0.1
 

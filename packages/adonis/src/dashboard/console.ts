@@ -103,8 +103,9 @@ export class CryptoConsole {
     const root = this.options.config.path === '' ? '' : this.options.config.path;
     const api = this.options.config.api;
 
+    // One route only: AdonisJS normalizes the trailing slash, so `/path` and `/path/` are the same
+    // route and registering both is a "Duplicate route found" at boot.
     router.get(root === '' ? '/' : root, (ctx) => this.spa(ctx));
-    if (root !== '') router.get(`${root}/`, (ctx) => this.spa(ctx));
     router.get(`${root}/assets/:file`, (ctx) => this.asset(ctx));
 
     router.get(`${api}/meta`, (ctx) => this.#guarded(ctx, () => this.meta(ctx)));

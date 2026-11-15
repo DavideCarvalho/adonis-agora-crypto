@@ -117,10 +117,15 @@ function csrfToken(): string | undefined {
 }
 
 export class CryptoApi {
-  constructor(
-    readonly base: string,
-    private readonly fetcher: typeof fetch = fetch,
-  ) {}
+  readonly base: string;
+  private readonly fetcher: typeof fetch;
+
+  constructor(base: string, fetcher: typeof fetch = globalThis.fetch) {
+    this.base = base;
+    // `this.fetcher(...)` would call it with the instance as `this`; Chrome's `fetch` only accepts
+    // the global object and throws "Illegal invocation" otherwise (Node does not care). Bind once.
+    this.fetcher = fetcher.bind(globalThis);
+  }
 
   async #request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const headers: Record<string, string> = { accept: 'application/json' };

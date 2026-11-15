@@ -163,3 +163,62 @@ describe('console API', () => {
     expect(bad.status).toBe(400);
   });
 });
+
+describe('console routes', () => {
+  function makeConsole(path?: string): CryptoConsole {
+    const crypto = memoryCrypto();
+    return new CryptoConsole({
+      service: crypto.service,
+      config: resolveDashboardConfig({
+        ...(path !== undefined ? { path } : {}),
+        authorize: () => ({ allowed: true as const }),
+      }),
+      spaDir: '/nowhere',
+      defaultPartition: 'shop',
+      inProduction: true,
+      topology: 'control-plane',
+      logger: { warn: () => {}, info: () => {} },
+    });
+  }
+
+  /** AdonisJS normalizes the trailing slash and refuses `/<path>` next to `/<path>/`. */
+  function strictRouter(routes: Route[]) {
+    const seen = new Set<string>();
+    const register = (method: string) => (pattern: string, handler: Handler) => {
+      const key = `${method} ${pattern.length > 1 ? pattern.replace(/\/+$/, '') : pattern}`;
+      if (seen.has(key)) {
+        throw new Error(`Duplicate route found. "${method}: ${key}" route already exists`);
+      }
+      seen.add(key);
+      routes.push({ method, pattern, handler });
+      return {};
+    };
+    return {
+      get: register('GET'),
+      post: register('POST'),
+      patch: register('PATCH'),
+      delete: register('DELETE'),
+    };
+  }
+
+  it('registers the page once instead of `/<path>` and `/<path>/`', () => {
+    const routes: Route[] = [];
+    expect(() => makeConsole('/_crypto').register(strictRouter(routes))).not.toThrow();
+
+    const pages = routes.filter(
+      (route) =>
+        route.method === 'GET' && (route.pattern === '/_crypto' || route.pattern === '/_crypto/'),
+    );
+    expect(pages).toHaveLength(1);
+  });
+
+  it('registers the root page once when mounted at `/`', () => {
+    const routes: Route[] = [];
+    expect(() => makeConsole('/').register(strictRouter(routes))).not.toThrow();
+
+    expect(routes.filter((route) => route.method === 'GET' && route.pattern === '/')).toHaveLength(
+      1,
+    );
+    expect(routes.some((route) => route.pattern === '/assets/:file')).toBe(true);
+  });
+});

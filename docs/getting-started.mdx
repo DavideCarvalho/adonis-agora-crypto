@@ -13,6 +13,24 @@ migration for the three tables this package owns (`crypto_keys`, `crypto_key_ver
 `crypto_audit`). The provider creates them at boot too (`autoCreateSchema: true`), so a first local
 run needs no migration.
 
+## A schema of its own
+
+On Postgres (or a MySQL database), keep the crypto tables out of `public`:
+
+```ts title="config/crypto.ts"
+export default defineConfig({
+  topology: 'control-plane',
+  verifyTenant,
+  schema: 'crypto',
+})
+```
+
+The schema is written into every statement — DDL and queries alike name the table as
+`"crypto"."crypto_keys"` — so nothing depends on the connection's `search_path`. That is what makes
+it safe behind PgBouncer in transaction mode, where a `SET search_path` would not survive the
+connection swap. Create the schema yourself (`CREATE SCHEMA crypto`); crypto only uses it, and it
+refuses SQLite, where a schema is a file, not a namespace.
+
 ## Where the keys live
 
 ```ts title="config/crypto.ts"
