@@ -1,6 +1,6 @@
 {
   "name": "@adonis-agora/crypto-client",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Remote-safe client for an @adonis-agora/crypto server: every operation, a shared secret or authkit token, retries and timeouts, plus the KMS adapter and remote signer other Agora libs use.",
   "license": "MIT",
   "repository": {
