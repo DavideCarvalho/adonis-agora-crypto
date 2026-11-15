@@ -32,11 +32,16 @@ jobs:
 
       - run: pnpm check:package
 
-      - name: Check agora:doctor copy
-        run: pnpm --filter @adonis-agora/crypto check:agora-doctor
-
-      - name: Check crypto-kit copy
-        run: pnpm --filter @adonis-agora/crypto check:crypto-kit
+      # The copy checks only make sense once the server package (which carries the canonical
+      # agora:doctor and crypto-kit copies) exists; this branch lands the contract and the client.
+      - name: Check the agora:doctor and crypto-kit copies
+        run: |
+          if [ -d packages/adonis/src/crypto-kit ]; then
+            pnpm --filter @adonis-agora/crypto check:agora-doctor
+            pnpm --filter @adonis-agora/crypto check:crypto-kit
+          else
+            echo "No @adonis-agora/crypto package on this branch yet: skipping the copy checks."
+          fi
 
   # Lint, typecheck and build run once on the pinned version above; only the test suite fans out
   # across every Node line the ecosystem supports (both maintained lines accepted by AdonisJS 7).
