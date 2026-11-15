@@ -1,0 +1,108 @@
+---
+title: Browser and React
+description: The asymmetric half in the front end — X25519 identity, sealTo/openWith compatible with the kit, passphrase-sealed storage and React hooks.
+icon: MonitorSmartphone
+---
+
+`@adonis-agora/crypto-react` is the browser side of a share: each person has an X25519 key pair, the
+private half never leaves the device unsealed, and a shared payload is sealed to the recipient's
+public key — the server, its database and its backups only ever see `agora:pk1:…`.
+
+The crypto is **byte-compatible with the Agora crypto kit**: a share sealed in the browser opens with
+the kit's `openWith`, and one sealed by the server (or the kit) opens in the browser.
+
+## Install and create an identity
+
+```sh
+pnpm add @adonis-agora/crypto-react
+```
+
+```ts
+import { createBrowserIdentity, sealBrowserIdentity } from '@adonis-agora/crypto-react'
+
+const identity = createBrowserIdentity()
+// The public half is safe to store, print as a QR code and register with the app:
+await fetch('/api/crypto/keys', {
+  method: 'POST',
+  body: JSON.stringify(identity.publicKey),   // { kty: 'OKP', crv: 'X25519', x, kid, … }
+})
+
+// The private half is sealed with what the user knows:
+const sealed = await sealBrowserIdentity(identity, passphrase)
+localStorage.setItem('identity', sealed)
+```
+
+The app keeps `publicKey` (the crypto server can also hold it as an `x25519` key; the kit's `kid`
+makes a rotation safe). The private key exists unsealed only while the user is unlocked.
+
+## Share and open
+
+```ts
+import { sealTo, openWith } from '@adonis-agora/crypto-react'
+
+// sharing: the recipient's public key comes from the app (their profile, a QR code)
+const shared = sealTo(doctor.publicKey, JSON.stringify({ examId, pdfUrl }), { aad: `grant:${id}` })
+await api.post(`/grants/${id}/share`, { shared })
+
+// opening, on the recipient's device:
+const payload = JSON.parse(openWith(identity.privateKey, grant.shared, { aad: `grant:${id}` }))
+```
+
+`aad` binds the ciphertext to the grant: a share copied to another grant does not open.
+
+## React
+
+```tsx
+import { CryptoProvider, useSealTo, usePublicKey } from '@adonis-agora/crypto-react'
+
+export function Root() {
+  return (
+    <CryptoProvider>
+      <ShareExamButton />
+    </CryptoProvider>
+  )
+}
+
+function ShareExamButton({ doctor }) {
+  const sealTo = useSealTo()
+  const me = usePublicKey()
+  return (
+    <button
+      disabled={!me}
+      onClick={() => {
+        const shared = sealTo(doctor.publicKey, JSON.stringify({ examId: 42 }))
+        void api.post('/grants/share', { to: doctor.id, shared })
+      }}
+    >
+      Compartilhar exame
+    </button>
+  )
+}
+```
+
+`CryptoProvider` holds the unlocked identity; `unlock(sealed, passphrase)`, `create(passphrase)` and
+`lock()` are on the context (`useCrypto()`). Nothing is stored or unlocked for you: the app decides
+when to ask for the passphrase (or derive a session key) and where the sealed document lives
+(`localStorageIdentityStorage()` is the default helper, and private-mode browsers degrade to a
+session-only identity).
+
+## Unlock on the server render
+
+The provider accepts an already-unlocked `identity` — for an SSR shell that holds the key natively,
+or tests:
+
+```tsx
+<CryptoProvider identity={alreadyUnlocked}>
+  <App />
+</CryptoProvider>
+```
+
+## What it does not do
+
+- It does not talk to the crypto server: register the public key and store the shares through your
+  own API (the server records the grant and the audit).
+- It does not replace the token: the envelope/request encryption between apps is
+  [the transport page](/docs/crypto/transport); this is about a *person* opening a *share*.
+- It has no opinion on login, sessions or key escrow. If you need the server to be able to open a
+  share (a support flow), use a server-held `x25519` key instead — see
+  [Sharing](/docs/crypto/sharing).

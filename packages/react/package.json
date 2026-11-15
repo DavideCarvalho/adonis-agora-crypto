@@ -1,0 +1,71 @@
+{
+  "name": "@adonis-agora/crypto-react",
+  "version": "0.0.0",
+  "description": "Browser SDK for the asymmetric half of @adonis-agora/crypto: X25519 key pairs, sealTo/openWith byte-compatible with the Agora crypto kit, a passphrase-sealed identity, and React hooks \u2014 so a share is only readable by the recipient's device.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DavideCarvalho/adonis-agora-crypto.git",
+    "directory": "packages/react"
+  },
+  "homepage": "https://davidecarvalho.github.io/agora/docs/crypto/react",
+  "bugs": {
+    "url": "https://github.com/DavideCarvalho/adonis-agora-crypto/issues"
+  },
+  "keywords": [
+    "adonisjs",
+    "adonis",
+    "crypto",
+    "react",
+    "browser",
+    "x25519",
+    "agora"
+  ],
+  "author": "Davi Carvalho <davi@goflip.ai>",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "pnpm run build",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@adonis-agora/crypto-core": "workspace:^",
+    "@noble/ciphers": "2.4.0",
+    "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0"
+  },
+  "peerDependencies": {
+    "react": ">=19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "@types/react": "19.3.0",
+    "react": "19.3.1",
+    "typescript": "7.0.2",
+    "vitest": "5.1.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

@@ -117,6 +117,11 @@ The audit trail records `actor ?? clientId ?? partition`:
 
 Authorization always uses the token's own capabilities — never the actor's.
 
+An operation can also carry **`context`**: a short label for *what* the open was for (`user:42`,
+`grant:7`, `boot`, `config:streaming:production:db.password`). It is not encrypted, so never put the
+plaintext or a secret in it; it lands on the audit row as `metadata.context`, refusals included. The
+crypto server only knows the label you send — the app is the one that knows which person is behind it.
+
 ## Refusals
 
 | Case | Status | Code |

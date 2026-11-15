@@ -26,7 +26,8 @@
     "version-packages": "changeset version && node scripts/sync-version.mjs && biome check --write .",
     "release": "node scripts/sync-version.mjs --check && pnpm --filter './packages/*' build && changeset publish",
     "check:agora-doctor": "node scripts/check-agora-doctor.mjs packages/adonis",
-    "check:crypto-kit": "node scripts/check-crypto-kit.mjs packages/adonis"
+    "check:crypto-kit": "node scripts/check-crypto-kit.mjs packages/adonis",
+    "bench": "node scripts/bench-crypto.mjs"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "0.18.5",

@@ -1,0 +1,75 @@
+---
+title: Performance
+description: What the crypto paths cost, whether Adonis encryption blocks the event loop, and when a worker thread is worth it.
+icon: Gauge
+---
+
+```sh
+pnpm bench          # node scripts/bench-crypto.mjs
+pnpm bench --json   # the same numbers as JSON
+```
+
+The bench is not part of `pnpm test`: numbers on a shared CI box are noisy. Run it before and after a
+change that touches the hot paths, and on the machine class you deploy to.
+
+## The short version
+
+- **AdonisJS encryption is synchronous.** `@boringnode/encryption` (which the Agora crypto kit uses)
+  calls `createCipheriv`/`createDecipheriv`: it runs on the main thread, and its API is synchronous.
+  There is no threadpool and no worker behind it — it does not "already do that".
+- **For normal secrets that is fine.** At 128 B–64 KiB an operation costs tens of microseconds to a
+  fraction of a millisecond, which is less than the HTTP hop around it.
+- **Large payloads deserve a different path.** At 1 MiB the kit costs ~7–11 ms per value, and most of
+  that is not AES: it is the base64 + JSON message around it. Use a data key (`generateDataKey`) and
+  encrypt the payload with `crypto.subtle` (which does use the libuv threadpool) or a worker thread —
+  not `encrypt` with a 1 MiB plaintext.
+- **An in-process HTTP hop costs more than the cipher**: ~0.4–0.6 ms p50 through `/_crypto/v1` with a
+  memory store. A remote hop adds the network on top; batch when a loop would make one call per row.
+
+## Measured (Node 24.22.2, this repo, one vCPU)
+
+| Path | 128 B | 4 KiB | 64 KiB | 1 MiB |
+| --- | --- | --- | --- | --- |
+| kit `seal` (Adonis AES-256-GCM, sync) | 7 µs | 28 µs | 369 µs | 7.4 ms |
+| kit `open` (Adonis AES-256-GCM, sync) | 7 µs | 31 µs | 528 µs | 14.6 ms |
+| `crypto.subtle` AES-GCM (threadpool) | 21 µs | 24 µs | 37 µs | 192 µs |
+| kit `sealTo` (X25519) | 60 µs | 65 µs | — | — |
+| kit `openWith` (X25519) | 63 µs | 70 µs | — | — |
+| kit `sign` / `verify` (Ed25519, 1 KiB) | 44 µs / 67 µs | | | |
+| `node:crypto` HMAC-SHA256 (1 KiB) | 5 µs | | | |
+| HTTP `POST /encrypt` (in-process server) | — | ~0.6 ms p50 (1 KiB) | ~0.47 ms p50 (64 KiB) | — |
+| HTTP `POST /decrypt` (in-process server) | — | ~0.39 ms p50 (1 KiB) | ~0.22 ms p50 (64 KiB) | — |
+
+## Does it block the event loop?
+
+A 5 ms timer is parked before the workload; the largest lateness it sees is how long the process
+could not run timers (≈ the block):
+
+| Workload | Max timer lateness |
+| --- | --- |
+| kit `seal` 64 KiB × 50 | **19 ms** (≈ 0.4 ms/op, matching its p50) |
+| kit `seal` 1 MiB × 20 | **212 ms** (≈ 10 ms/op) |
+| raw `createCipheriv` 1 MiB × 20 | 11 ms (≈ 0.55 ms/op) — the kit's 1 MiB cost is mostly encoding |
+| `crypto.subtle` 1 MiB × 20 | **1 ms** — the work moved to the libuv threadpool |
+
+Two conclusions follow:
+
+1. A single operation blocks for its own duration. At ≤64 KiB that is sub-millisecond, so a request
+   handler that seals one secret per row is not a problem; a loop of thousands is (batch it, or move
+   it off the request path).
+2. Awaiting a CPU-bound promise does **not** free the loop: the kit's `seal()` is async in signature
+   only. Only real I/O (the threadpool, a database, a socket) yields to timers.
+
+## When to use a worker thread
+
+| Situation | Do this |
+| --- | --- |
+| Secrets up to 64 KiB, a handful per request | nothing: the cost is below the HTTP hop |
+| A loop sealing thousands of small values (a migration, a bulk import) | batch where the API allows it, or run the loop in a job/worker |
+| Payloads ≥ 256 KiB (files, exports, media) | `generateDataKey` once, encrypt locally with `crypto.subtle` (threadpool), store the wrapped key — do not send the payload through `encrypt` |
+| Sustained CPU-bound encryption on the request path | a `worker_threads` pool around the data-key path; the crypto server itself stays a small KMS, not a bulk cipher |
+
+`crypto.subtle` already runs on the libuv threadpool (four threads by default), so a worker pool is
+only worth it when you need more parallelism than that or want to keep even the encoding off the main
+thread. If a real workload needs it, the seam is small: a `SealedPayloadWorker` around the data-key
+path — ask and we add it with the same format guarantees.

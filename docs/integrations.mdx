@@ -165,6 +165,76 @@ The receiver uses `cryptoEnvelopeMiddleware({ client, key })` (or `{ service, pa
 `@adonis-agora/crypto`, and `cryptoEnvelopeReply()` to answer encrypted. See
 [encrypted requests](/docs/crypto/transport).
 
+## Secrets stored in config, decrypted by the app
+
+`config.kms` (above) protects the values config seals itself. When the value must stay unreadable to
+the control plane, config stores a **crypto reference** instead of a secret, and the app resolves it:
+
+```ts title="config/config.ts (control plane: encrypt only)"
+import { configCrypto } from '@adonis-agora/crypto-integrations/config'
+
+const secrets = configCrypto({ source: { client: crypto }, key: 'config-root' })
+
+// writing an entry: the value stored is { key, ciphertext } — never the plaintext
+const reference = await secrets.seal('hunter2', {
+  app, environment, label, key: 'db.password',
+})
+```
+
+```ts title="the app (decrypt only)"
+const secrets = configCrypto({ source: { client: crypto } })
+const password = await secrets.open(entry.value, { app, environment, label, key })
+```
+
+| Piece | Value |
+| --- | --- |
+| stored value | `{ "key": "config-root", "ciphertext": "agora:ct1:config-root:1:…" }` |
+| key | `aes256-gcm`, `config-root`, in one partition both sides address (a dedicated `platform`, or the control plane's) |
+| control plane token | `crypto:encrypt:config-root` (+ `crypto:keys:read` for the console) — never `decrypt` |
+| app token | `crypto:decrypt:config-root` — never `encrypt` |
+| AAD | `config:<app>:<environment>:<label>:<key>` (`configCryptoAad`) |
+| allow-list | `keys` (default `[key]`): a reference naming another key is refused before any call |
+
+`isCryptoReference(value)` and `parseReference(value)` are exported so config can mask the value and
+validate it without knowing crypto; a rotation keeps old references opening (`keys` lists the old
+root during the window). Works with the server embedded (`{ service, partition }`) or remote
+(`{ client }`), and every seal/open is audited by the crypto server.
+
+## Auditing a recipient-held open
+
+Server-held opens are audited by the crypto server. A `sealTo` share is opened on the recipient's
+device, so the app emits `crypto:sealed.open` with `sealedOpenEvent({ actor, subject, key, kid,
+resource })`: `actor ?? sub` (the crypto audit's own rule), the `kid` that opened it and a timestamp.
+`openWithAudit()` in `@adonis-agora/crypto-react` returns the value plus `kid`/`at` for that event.
+
+## Adopting it without a dependency
+
+The Agora rule is that a lib does not depend on another product lib, and
+`crypto-integrations` is not on npm yet. Until it is, a lib can implement the same seams **structurally**
+— these are the whole contract, and they are stable:
+
+```ts
+// 1. the stored reference (server-held), nothing else
+type CryptoReference = { key: string; ciphertext: string }
+
+// 2. the AAD both sides derive
+const configCryptoAad = (entry: { app: string; environment: string; label?: string; key: string }) =>
+  `config:${entry.app}:${entry.environment}:${entry.label ?? 'main'}:${entry.key}`
+
+// 3. the audit payload + channel (recipient-held)
+//    payload.event = 'crypto:sealed.open'
+//    channel       = `agora:${lib}:sealed.open`   (lib = the emitter, e.g. 'config')
+//    shape         = { event, v: 1, actor, subject?, key, kid?, resource?, at, result }
+```
+
+Capabilities: sealing needs `crypto:encrypt:<key>`, opening needs `crypto:decrypt:<key>`; the emitting
+lib's token never holds the other half. `decrypt` accepts a `context` (≤200 chars, no control
+characters) recorded as `metadata.context` on the crypto audit, refusals included.
+
+When `@adonis-agora/crypto-integrations` 0.1.0 is published, swap the copies for
+`configCrypto`/`configCryptoAad`/`sealedOpenEvent`/`sealedOpenChannel` — or add the package as an
+optional peer, the same way `@adonis-agora/authkit-client` is optional elsewhere.
+
 ## Seams still missing in the rc libs
 
 These would make an integration cleaner, but are **not** changed today:
@@ -174,4 +244,5 @@ These would make an integration cleaner, but are **not** changed today:
 | flags | `packages/adonis/src/topology/remote_source.ts` | the tenant ruleset fetch builds its own `fetch`; a `fetch` option (like `transports.http`) would let the ruleset read be encrypted too |
 | durable | `packages/adonis/src/transports/*` | `dispatchWorkflowTask`, `dispatchStepEvent` and the P4 start-run/run-request/reply/tenant-event methods carry payloads the decorator does not cover yet; a hook per payload (or a `sealPayload` option) would close them |
 | config | `packages/client/src/client.ts` | `fetch` already exists; a `payloadCodec` would let the whole document be sealed, not just the transport |
+| config | `packages/adonis/src/admin.ts` | the result of `sealTo`/`configCrypto.seal` needs a place on an entry (a `crypto` field next to `sealedTo`); today a reference is just a JSON value the console must not reveal |
 | authkit-server | `src/crypto/authkit_crypto.ts` | `kms` exists; a `kmsKey` name convention would remove the custom key option |
