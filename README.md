@@ -11,6 +11,7 @@ packages/client     @adonis-agora/crypto-client    typed client, KMS adapter, re
 packages/adonis     @adonis-agora/crypto           the server: keys, operations, audit, HTTP API
 packages/dashboard  @adonis-agora/crypto-dashboard the console (React SPA)
 packages/integrations @adonis-agora/crypto-integrations 0.x seams for authkit, agent, config, durable, flags, http
+packages/react      @adonis-agora/crypto-react    browser/React X25519 identity, sealTo/openWith, passphrase-sealed storage
 ```
 
 ```sh
