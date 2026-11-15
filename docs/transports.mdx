@@ -1,0 +1,83 @@
+---
+title: Transports
+description: How a tenant reaches the control plane — HTTP by default, Redis as the first broker driver, and what every driver guarantees.
+icon: Waypoints
+---
+
+A tenant talks to the control plane over a **transport**. HTTP is the default: an app that
+configures nothing behaves exactly as before. A broker driver changes only that server-to-server
+hop — same calls, same capabilities, same audit.
+
+```ts
+// config/crypto.ts (an app)
+import { defineConfig, transports } from '@adonis-agora/crypto'
+
+export default defineConfig({
+  topology: 'tenant',
+  tenant: {
+    url: env.get('CRYPTO_URL'),
+    partition: 'streaming',
+    token,
+    // default: transports.http({ url })
+    transport: transports.redis({ connection: redis.connection('main') }),
+  },
+})
+```
+
+```ts
+// config/crypto.ts (the control plane) — the same driver, consumed here
+export default defineConfig({
+  topology: 'control-plane',
+  verifyTenant,
+  transport: transports.redis({ connection: redis.connection('main') }),
+})
+```
+
+## The browser always uses HTTP
+
+The transport is **only for tenant ↔ control-plane traffic between servers**. Anything a browser
+calls — the console, `@adonis-agora/crypto-react`, the app's own endpoints — talks HTTP, and the
+control plane keeps its HTTP API (`/_crypto/v1/...`) mounted whatever tenant transport is
+configured. A fleet can mix tenants: some on HTTP, some on a broker, the same control plane serving
+both (there is a test for exactly that).
+
+That also means the broker never replaces the API: it is an extra consumer next to it.
+
+## Drivers
+
+| Driver | Call channel | Peer |
+| --- | --- | --- |
+| `transports.http({ url, fetch?, timeoutMs? })` (default) | request/response over `POST /_crypto/v1/transport` | none (global `fetch`; `fetch` lets you add mTLS, a proxy or the crypto envelope) |
+| `transports.redis({ connection, prefix?, timeoutMs? })` | request on `<prefix>:requests`, reply on `<prefix>:reply:<id>` | `@adonisjs/redis` (or any ioredis-shaped connection) |
+
+Both carry the same envelope (`v`, `id`, `operation`, `input`, `token`, `issuedAt`), so switching
+drivers is a config change, not a code change.
+
+`queue`, `bullmq` and `durable` are the next drivers: they need a reply channel (a broker queue is
+one-way) and the app's ready queue/worker instance, so they land as `transports.broker(...)`
+adapters. The Redis driver is the reference implementation of that seam.
+
+## What every driver guarantees
+
+- **The token travels on every message**, and the control plane runs `verifyTenant` on each one. A
+  shared broker is not a trust boundary.
+- **Partition and capabilities come from the verified token only** — never from the payload, the
+  queue name or a header.
+- **Dedupe** by `<partition>:<id>`: a broker delivers at-least-once, and the same id never runs an
+  operation twice. The in-process store is 10 minutes / 10k ids; a multi-replica control plane
+  should pass a shared one.
+- **Bounded**: 512 KiB per message, and a message older than 5 minutes is refused.
+- **Timeouts**: the caller's `timeoutMs` (default 10s); a broker that loses the reply surfaces
+  `TransportError('timeout')`, never a silent hang.
+- **Dead-letter**: a malformed or oversized message is not retried forever — it goes to the
+  driver's dead-letter (`<prefix>:dead` for Redis) with the reason.
+- **Audit**: the operation goes through the same service, so the crypto audit records the key,
+  version, actor (the token's `clientId`) and result as with HTTP.
+
+## Latency
+
+A brokered call is a queue hop: expect single-digit milliseconds on a local Redis and tens of
+milliseconds when the broker is remote, **on top of** the operation. A crypto operation waits for
+that on every request, so keep HTTP for latency-sensitive paths and use a broker when the crypto
+server must not expose a public endpoint (or the call must survive a restart of the caller). Batch
+where the API allows it (`encryptBatch`) to amortise the hop.

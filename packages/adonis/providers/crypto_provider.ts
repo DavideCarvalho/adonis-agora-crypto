@@ -27,12 +27,14 @@ import { registerCryptoDevTools } from '../src/dev_tools.js';
 import { registerDoctorChecks } from '../src/doctor/agora_doctor.js';
 import { agoraDoctorChecks } from '../src/doctor/checks.js';
 import { CryptoApi } from '../src/http/api.js';
-import { localOperations, remoteOperations } from '../src/operations.js';
+import { localOperations, remoteOperations, transportOperations } from '../src/operations.js';
 import type { CryptoRuntime } from '../src/runtime.js';
 import { setRuntime } from '../src/services/accessor.js';
 import { inSchema, type SqlDatabase } from '../src/sql.js';
 import type { CryptoStore } from '../src/store/store.js';
 import { resolveTenantVerifier } from '../src/topology/verify.js';
+import { serveBroker } from '../src/transports/broker.js';
+import { createCryptoRpc } from '../src/transports/rpc.js';
 
 declare module '@adonisjs/core/types' {
   interface ContainerBindings {
@@ -100,14 +102,18 @@ export default class CryptoProvider {
       ...(config.tenant.timeoutMs !== undefined ? { timeoutMs: config.tenant.timeoutMs } : {}),
       ...(config.tenant.retries !== undefined ? { retries: config.tenant.retries } : {}),
     });
+    const transport = config.tenant.transport;
+    const operations = transport
+      ? transportOperations(transport, config.tenant.token)
+      : remoteOperations(client);
     let lastCheckAt: string | undefined;
     let lastError: string | undefined;
     if (config.tenant.checkOnBoot !== false) {
       try {
-        await client.whoami();
+        await (transport ? operations.whoami() : client.whoami());
         lastCheckAt = new Date().toISOString();
         logger.info(
-          `[@adonis-agora/crypto] tenant ${config.tenant.partition} on ${config.tenant.url}`,
+          `[@adonis-agora/crypto] tenant ${config.tenant.partition} on ${transport ? `${transport.name} transport` : config.tenant.url}`,
         );
       } catch (error) {
         lastError = (error as Error).message;
@@ -116,7 +122,6 @@ export default class CryptoProvider {
         );
       }
     }
-    const operations = remoteOperations(client);
     const runtime: CryptoRuntime = {
       topology: 'tenant',
       partition: config.tenant.partition,
@@ -203,6 +208,22 @@ export default class CryptoProvider {
     logger.info(
       `[@adonis-agora/crypto] ${config.topology ?? 'standalone'}${api ? ` at ${api.prefix}/v1` : ''}`,
     );
+    if (api && config.topology === 'control-plane' && config.transport) {
+      const verifyTenant = await resolveTenantVerifier(config.verifyTenant);
+      await this.app.booted(async () => {
+        runtime.stopTransport = await serveBroker(
+          config.transport!,
+          createCryptoRpc({ service, verifyTenant, logger }),
+          {
+            deadLetter: async (_message, reason) =>
+              logger.warn(
+                `[@adonis-agora/crypto] dead-lettered a ${config.transport!.name} message: ${reason}`,
+              ),
+          },
+        );
+        logger.info(`[@adonis-agora/crypto] consuming the ${config.transport!.name} transport`);
+      });
+    }
     return runtime;
   }
 
@@ -365,6 +386,7 @@ export default class CryptoProvider {
   }
 
   async shutdown(): Promise<void> {
+    await this.#runtime?.stopTransport?.().catch(() => {});
     setRuntime(undefined);
     this.#runtime = undefined;
     this.#building = undefined;
