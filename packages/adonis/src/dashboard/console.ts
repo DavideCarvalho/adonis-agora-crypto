@@ -449,7 +449,9 @@ export function cryptoConsoleSearchFor(
   limit: number,
 ) => Promise<Array<{ title: string; subtitle?: string; href: string }>> {
   return cryptoConsoleSearch(async (ctx) => {
-    const partition = (ctx.request.qs() as { partition?: string }).partition ?? '';
+    // The switcher's ⌘K sends `app` (the shell picker); a console-local call may send `partition`.
+    const query = ctx.request.qs() as { app?: string; partition?: string };
+    const partition = query.partition ?? query.app ?? '';
     return {
       keys: async () => {
         if (partition === '') return [];
