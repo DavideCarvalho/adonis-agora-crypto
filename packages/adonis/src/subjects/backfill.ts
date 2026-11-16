@@ -1,4 +1,4 @@
-import { isSubjectCiphertext, readSubjectCiphertext } from './ciphertext.js';
+import { hasAgoraValueTag, isSubjectCiphertext, readSubjectCiphertext } from './ciphertext.js';
 import { SubjectKeyError } from './errors.js';
 import {
   columnAad,
@@ -260,7 +260,7 @@ async function fillOne(
     } else {
       return 'unchanged';
     }
-  } else if ((raw as string).toLowerCase().startsWith('agora:')) {
+  } else if (hasAgoraValueTag(raw as string)) {
     throw new SubjectKeyError(
       'invalid',
       `crypto: ${where} holds another kind of agora ciphertext; it is not plaintext`,
