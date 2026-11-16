@@ -10,7 +10,7 @@ Control-plane attribution, per-viewer console apps and a lazy tenant URL.
   `keys.create|rotate|policy|delete|export`, `denied`, `subjects.forget`, `subjects.cache`), with
   `app` on the envelope set to the partition the operation acted on: the tenant of the verified token
   on a control plane, the app itself when standalone. A tenant publishes only what the control plane
-  cannot see (its subject data-key cache, and the local half of `forget`). Payloads carry the key
+  cannot see (subject data-key cache misses, and the local half of `forget`). Payloads carry the key
   name, outcome, error code, sizes and duration, never plaintext, ciphertext, key material, AAD or
   audit context. Diagnostics is read through its global slot; no new dependency.
 - **Console apps per viewer.** `console.authorize` may answer `{ allowed: true, apps: '*' | string[] }`

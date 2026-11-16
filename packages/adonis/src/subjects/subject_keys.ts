@@ -152,12 +152,15 @@ export class SubjectKeys {
     this.#app = options.app === '' ? undefined : options.app;
   }
 
-  /** `subjects.cache`: whether a data key came from this process' cache (the control plane never sees a hit). */
-  #reportCache(key: string, op: 'encrypt' | 'decrypt', outcome: 'hit' | 'miss'): void {
+  /**
+   * `subjects.cache`: a data key this process had to fetch from the control plane. Only misses are
+   * reported: a hit happens on every read and write and would flood the recorders.
+   */
+  #reportMiss(key: string, op: 'encrypt' | 'decrypt'): void {
     const app = this.#app;
     emitCrypto(
       'subjects.cache',
-      () => ({ ...(app !== undefined ? { app } : {}), key, op, outcome }),
+      () => ({ ...(app !== undefined ? { app } : {}), key, op, outcome: 'miss' }),
       { app },
     );
   }
@@ -521,10 +524,9 @@ export class SubjectKeys {
       if (cached.key !== key) {
         throw new SubjectKeyError('invalid', 'crypto: the ciphertext names another subject key');
       }
-      if (track) this.#reportCache(key, track, 'hit');
       return this.#copy(cached);
     }
-    if (track) this.#reportCache(key, track, 'miss');
+    if (track) this.#reportMiss(key, track);
     let pending = this.#unwrapping.get(id);
     let bytes: Buffer | undefined;
     if (!pending) {
@@ -600,11 +602,8 @@ export class SubjectKeys {
     for (let attempt = 0; ; attempt += 1) {
       this.#assertNotForgotten(key);
       const cached = this.cache.current(key);
-      if (cached) {
-        if (track && attempt === 0) this.#reportCache(key, track, 'hit');
-        return { id: cached.id, bytes: this.#copy(cached) };
-      }
-      if (track && attempt === 0) this.#reportCache(key, track, 'miss');
+      if (cached) return { id: cached.id, bytes: this.#copy(cached) };
+      if (track && attempt === 0) this.#reportMiss(key, track);
       const rotation = this.#rotating.get(key);
       if (rotation) {
         await rotation.catch(() => {});

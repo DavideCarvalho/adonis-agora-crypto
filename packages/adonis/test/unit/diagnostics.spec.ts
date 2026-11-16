@@ -138,7 +138,7 @@ describe('diagnostics events', () => {
     expect(seen).toEqual([]);
   });
 
-  it('a tenant leaves operations to the control plane and reports only its data-key cache', async () => {
+  it('a tenant leaves operations to the control plane and reports only its cache misses', async () => {
     const server = memoryCrypto({ partition: 'research' });
     // The tenant's operations reach the control plane's service (as a transport would).
     const subjects = new SubjectKeys({
@@ -157,15 +157,9 @@ describe('diagnostics events', () => {
         : entry.event,
     );
     // keys.create / datakey come from the service (the control plane); the tenant adds no
-    // `encrypt`/`decrypt` of its own (values are sealed locally), only the cache it alone sees.
-    expect(byOrigin).toEqual([
-      'subjects.cache:encrypt:miss',
-      'datakey',
-      'keys.create',
-      'datakey',
-      'subjects.cache:encrypt:hit',
-      'subjects.cache:decrypt:hit',
-    ]);
+    // `encrypt`/`decrypt` of its own (values are sealed locally), only the cache misses it alone
+    // sees. Hits (the second encrypt, the decrypt) publish nothing.
+    expect(byOrigin).toEqual(['subjects.cache:encrypt:miss', 'datakey', 'keys.create', 'datakey']);
     expect(seen.every((entry) => entry.app === 'research')).toBe(true);
     expect(seen.find((entry) => entry.event === 'subjects.cache')!.payload).toEqual({
       app: 'research',
@@ -173,6 +167,26 @@ describe('diagnostics events', () => {
       op: 'encrypt',
       outcome: 'miss',
     });
+  });
+
+  it('reports a decrypt miss once the data key left the cache, and never a hit', async () => {
+    const server = memoryCrypto({ partition: 'research' });
+    const subjects = new SubjectKeys({
+      app: 'research',
+      operations: localOperations(server.service, server.principal),
+      store: new MemoryDataKeyStore(),
+    });
+    const subject = { type: 'researcher', id: 8 };
+    const sealed = await subjects.encrypt(subject, 'x');
+    await subjects.decrypt(sealed, { subject });
+    subjects.evict(subject);
+    seen = [];
+    await subjects.decrypt(sealed, { subject });
+    await subjects.decrypt(sealed, { subject });
+    expect(seen.map((entry) => [entry.event, entry.payload.op, entry.payload.outcome])).toEqual([
+      ['subjects.cache', 'decrypt', 'miss'],
+      ['decrypt', undefined, 'ok'],
+    ]);
   });
 
   it('forget reports the local shredding next to the control plane delete', async () => {

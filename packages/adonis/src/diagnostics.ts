@@ -8,8 +8,8 @@ import { channel } from 'node:diagnostics_channel';
  * Who emits: the process that runs the operation. A standalone app and a control plane run them in
  * process and emit with `app` = the partition the operation acted on (on a control plane, the
  * tenant named by the verified token). A tenant sends its operations to the control plane, which
- * emits them; the tenant emits only what the control plane cannot see (its subject data-key cache,
- * and the local half of `forget`).
+ * emits them; the tenant emits only what the control plane cannot see (its subject data-key cache
+ * misses, and the local half of `forget`).
  *
  * Payloads never carry plaintext, ciphertext, key material, AAD or audit context values: only the
  * operation, the key name, the outcome, an error code, sizes and the duration.
@@ -92,12 +92,15 @@ export interface CryptoSubjectForgetPayload {
   durationMs: number;
 }
 
-/** A subject data-key lookup: served from this process' cache, or unwrapped by the control plane. */
+/**
+ * A subject data key missing from this process' cache, so fetched from the control plane. Hits are
+ * not reported (one per read and write would flood the recorders).
+ */
 export interface CryptoSubjectCachePayload {
   app?: string;
   key: string;
   op: 'encrypt' | 'decrypt';
-  outcome: 'hit' | 'miss';
+  outcome: 'miss';
 }
 
 export type CryptoDiagnosticPayloads = {

@@ -25,7 +25,7 @@ onDiagnostic('crypto', 'denied', (event) => {
 | `keys.create`, `keys.rotate`, `keys.policy`, `keys.delete`, `keys.export` | the same |
 | `denied` | `app`, `op` (the event it would have been), `key?`, `capability`, `errorCode: 'forbidden'`, `actor`, `clientId?` |
 | `subjects.forget` | `app?`, `key` (the subject key), `outcome`, `errorCode?`, `dataKeys?`, `durationMs` |
-| `subjects.cache` | `app?`, `key`, `op` (`encrypt`/`decrypt`), `outcome` (`hit`/`miss`) |
+| `subjects.cache` | `app?`, `key`, `op` (`encrypt`/`decrypt`), `outcome: 'miss'` |
 
 `bytes` is the size of the plaintext (or the signed message). A payload never carries plaintext,
 ciphertext, key material, AAD or the audit `context`, and an error is reported by its code only.
@@ -40,5 +40,6 @@ acted on:
 - **control plane**: the server, with `app` = the tenant named by the verified token (or the app
   picked in the console).
 - **tenant**: nothing for the operations it sends to the server (the server publishes those). It
-  publishes only what the server cannot see: `subjects.cache`, and `subjects.forget` for the data
+  publishes only what the server cannot see: `subjects.cache` when a subject data key was not in its
+  cache and had to come from the server (cache hits are not published), and `subjects.forget` for the data
   keys it removes from its own database.
