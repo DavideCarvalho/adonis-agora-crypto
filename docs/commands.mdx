@@ -41,7 +41,7 @@ app's own name.
 
 | Command | What it does |
 | --- | --- |
-| `crypto:subjects:backfill <model> [--batch-size N] [--from <cursor>] [--rotate] [--dry-run] [--column <attr>] [--skip-errors] [--adopt-moved]` | encrypt a model's [encrypted columns](/docs/crypto/subjects) in place, in batches; resumable |
+| `crypto:subjects:backfill <model> [--export <name>] [--batch-size N] [--from <cursor>] [--rotate] [--dry-run] [--column <attr>] [--skip-errors] [--adopt-moved]` | encrypt a model's [encrypted columns](/docs/crypto/subjects) in place, in batches; resumable |
 | `crypto:subjects:rewrap-keys [--subject <id> [--type <type>]] [--from <id>]` | rewrap stored data keys under the latest subject-key version |
 | `crypto:subjects:forget <subject> [--type <type>] [--force]` | delete a subject's key: its data becomes unrecoverable (asks first) |
 
@@ -49,6 +49,8 @@ app's own name.
 node ace crypto:subjects:backfill '#models/note' --dry-run
 node ace crypto:subjects:backfill '#models/note' --from 01J...
 ```
+
+The model module can export the model as `export default` or by name (`export class Note`). When it exports several models, pick one with `--export Note`.
 
 ## Operations
 

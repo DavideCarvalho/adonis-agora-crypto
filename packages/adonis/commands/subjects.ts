@@ -16,6 +16,35 @@ function subjectsOf(): SubjectKeys {
   return subjects;
 }
 
+function isModelClass(value: unknown): boolean {
+  return typeof value === 'function' && typeof (value as { query?: unknown }).query === 'function';
+}
+
+/**
+ * The model a backfill runs on: the module's `export default`, the export named by
+ * `exportName`, or the module's only model export (apps that write `export class Note`).
+ */
+export function resolveBackfillModel(
+  module: Record<string, unknown>,
+  specifier: string,
+  exportName?: string,
+): BackfillModel {
+  if (exportName !== undefined) {
+    const named = module[exportName];
+    if (!isModelClass(named)) {
+      throw new Error(`"${specifier}" has no model exported as "${exportName}"`);
+    }
+    return named as BackfillModel;
+  }
+  if (isModelClass(module.default)) return module.default as BackfillModel;
+  const models = Object.entries(module).filter(([, value]) => isModelClass(value));
+  if (models.length === 1) return models[0]![1] as BackfillModel;
+  if (models.length === 0) throw new Error(`"${specifier}" exports no model`);
+  throw new Error(
+    `"${specifier}" exports several models (${models.map(([name]) => name).join(', ')}); pick one with --export`,
+  );
+}
+
 abstract class SubjectsCommand extends BaseCommand {
   static override options: CommandOptions = { startApp: true };
 
@@ -38,6 +67,11 @@ export class CryptoSubjectsBackfill extends SubjectsCommand {
 
   @args.string({ description: 'The model, as the app imports it (#models/note)' })
   declare model: string;
+
+  @flags.string({
+    description: 'The export to use when the module has no default export (WritingDocument)',
+  })
+  declare export: string;
 
   @flags.number({ description: 'Rows per batch. Default 500' })
   declare batchSize: number;
@@ -70,8 +104,12 @@ export class CryptoSubjectsBackfill extends SubjectsCommand {
   override async run(): Promise<void> {
     try {
       subjectsOf();
-      const Model = await this.app.importDefault<BackfillModel & object>(this.model);
-      const result = await backfillEncryptedColumns(Model as BackfillModel, {
+      const Model = resolveBackfillModel(
+        (await this.app.import(this.model)) as Record<string, unknown>,
+        this.model,
+        this.export,
+      );
+      const result = await backfillEncryptedColumns(Model, {
         ...(this.batchSize !== undefined ? { batchSize: Number(this.batchSize) } : {}),
         // Kept as text: the database compares it with the key ("0042" must not become 42).
         ...(this.from !== undefined ? { after: this.from } : {}),
