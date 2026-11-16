@@ -1,5 +1,11 @@
 # @adonis-agora/crypto
 
+## 0.11.1
+
+### Patch Changes
+
+- [#25](https://github.com/DavideCarvalho/adonis-agora-crypto/pull/25) [`b62097b`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/b62097b081fa9c76ad71a73b011bccc27300b94f) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `legacyPlaintext` and the subjects backfill now refuse only the library's own value tags (`agora:se1:`, `agora:ct1:`, `agora:v1:`, `agora:pk1:`, `agora:sig1:`, in any case) instead of any value starting with `agora:`. Plain text such as "Agora: …" is read as legacy plaintext and encrypted by the backfill; `AGORA:SE1:…` is still refused. New exports: `AGORA_VALUE_TAGS`, `hasAgoraValueTag`.
+
 ## 0.11.0
 
 ### Minor Changes
