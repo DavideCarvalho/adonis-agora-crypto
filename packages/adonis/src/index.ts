@@ -53,6 +53,7 @@ export {
   type RemoteSigner,
   type RewrapInput,
   type RewrapResult,
+  type ServerUrlSource,
   type SignInput,
   type SignResult,
   statusForErrorCode,
@@ -121,6 +122,16 @@ export {
   type DevToolsLib,
   registerCryptoDevTools,
 } from './dev_tools.js';
+export {
+  CRYPTO_DIAGNOSTIC_EVENTS,
+  type CryptoDeniedPayload,
+  type CryptoDiagnosticEvent,
+  type CryptoDiagnosticPayloads,
+  type CryptoOperationEvent,
+  type CryptoOperationPayload,
+  type CryptoSubjectCachePayload,
+  type CryptoSubjectForgetPayload,
+} from './diagnostics.js';
 export type {
   AgoraDoctorCheck,
   AgoraDoctorReport,

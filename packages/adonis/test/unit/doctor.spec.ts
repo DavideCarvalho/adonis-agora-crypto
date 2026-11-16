@@ -144,4 +144,31 @@ describe('doctor checks', () => {
     expect(result.status).toBe('error');
     expect(result.fix).toMatch(/CRYPTO_URL/);
   });
+
+  it('resolves a lazy tenant url, and reports one that does not resolve', async () => {
+    const failing = stubApp(
+      defineConfig({
+        topology: 'tenant',
+        tenant: {
+          url: async () => {
+            throw new Error('issuer down');
+          },
+          partition: 'shop',
+          token: 'secret',
+        },
+      }),
+    );
+    const result = await check('crypto.tenant').run(failing);
+    expect(result.status).toBe('error');
+    expect(result.message).toMatch(/did not resolve: issuer down/);
+
+    const resolved = stubApp(
+      defineConfig({
+        topology: 'tenant',
+        tenant: { url: async () => 'http://127.0.0.1:1/_crypto', partition: 'shop', token: 'x' },
+      }),
+    );
+    const unreachable = await check('crypto.tenant').run(resolved);
+    expect(unreachable.message).toMatch(/^http:\/\/127\.0\.0\.1:1\/_crypto answered nothing/);
+  });
 });

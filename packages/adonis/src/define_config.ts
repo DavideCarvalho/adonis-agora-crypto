@@ -4,7 +4,11 @@ import type { CryptoStore } from './store/store.js';
 
 export type { CryptoKeyringConfig } from './crypto/keyring.js';
 
-import type { CryptoTransport, TenantTokenSource } from '@adonis-agora/crypto-core';
+import type {
+  CryptoTransport,
+  ServerUrlSource,
+  TenantTokenSource,
+} from '@adonis-agora/crypto-core';
 import type { CryptoKeyringConfig } from './crypto/keyring.js';
 import { LucidStore } from './store/lucid_store.js';
 import { MemoryStore } from './store/memory_store.js';
@@ -190,8 +194,13 @@ export interface ControlPlaneConfig extends BaseConfig {
 export interface TenantTopologyConfig extends BaseConfig {
   topology: 'tenant';
   tenant: {
-    /** The server's base URL, including its prefix (`https://crypto.example.com/_crypto`). */
-    url: string;
+    /**
+     * The server's base URL, including its prefix (`https://crypto.example.com/_crypto`), or a
+     * function that resolves it before the first call — `controlPlaneUrl({ issuer, resource:
+     * 'urn:agora:crypto' })` from `@adonis-agora/authkit-client`. A function is looked up again
+     * (its `refresh()` when it has one) after a connection error or a 404.
+     */
+    url: ServerUrlSource;
     /** This app's name on the server (the partition). */
     partition: string;
     /**
@@ -234,8 +243,8 @@ export function defineConfig(config: CryptoConfig): CryptoConfig {
         "crypto: tenant.token is required (authkitTenantToken({ issuer, clientId, clientSecret, resource: 'urn:agora:crypto' }) or the shared secret)",
       );
     }
-    if (!/^https?:\/\//.test(config.tenant.url)) {
-      throw new Error('crypto: tenant.url must be an absolute http(s) URL');
+    if (typeof config.tenant.url !== 'function' && !/^https?:\/\//.test(config.tenant.url)) {
+      throw new Error('crypto: tenant.url must be an absolute http(s) URL or a function');
     }
     if (raw.verifyTenant !== undefined) {
       throw new Error('crypto: `verifyTenant` only applies to topology "control-plane"');

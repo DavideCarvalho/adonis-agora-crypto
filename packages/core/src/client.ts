@@ -26,10 +26,16 @@ import {
   type Whoami,
 } from './index.js';
 import { resolveTenantToken, type TenantToken, type TenantTokenSource } from './token.js';
+import { ServerUrl, type ServerUrlSource } from './url.js';
 
 export interface CryptoClientOptions {
-  /** The server, including its prefix (`https://crypto.example.com/_crypto`). */
-  url: string;
+  /**
+   * The server, including its prefix (`https://crypto.example.com/_crypto`), or a function that
+   * resolves it before the first call (`controlPlaneUrl(...)` from `@adonis-agora/authkit-client`).
+   * A function is looked up again (its `refresh()` when it has one) after a connection error or a
+   * 404 the server did not explain.
+   */
+  url: ServerUrlSource;
   /** The app (partition); the server derives it from the token, this names it for shared secrets. */
   partition: string;
   /** A shared secret, a function (`authkitTenantToken(...)`), or an object with `get()`. */
@@ -45,13 +51,18 @@ export interface CryptoClientOptions {
 
 /** A refusal or a failure the server reported, with its wire code. */
 export class CryptoClientError extends Error {
+  /** A connection error, or a 404 with no crypto error body: the server may have moved. */
+  readonly unreachable: boolean;
+
   constructor(
     readonly status: number,
     readonly code: CryptoErrorCode | 'network' | 'timeout',
     message: string,
+    options: { unreachable?: boolean } = {},
   ) {
     super(message);
     this.name = 'CryptoClientError';
+    this.unreachable = options.unreachable ?? code === 'network';
   }
 }
 
@@ -88,8 +99,8 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
  * ```
  */
 export class CryptoClient {
-  readonly url: string;
   readonly partition: string;
+  readonly #url: ServerUrl;
   readonly #token: TenantToken;
   readonly #fetch: typeof fetch;
   readonly #timeoutMs: number;
@@ -99,13 +110,23 @@ export class CryptoClient {
   constructor(options: CryptoClientOptions) {
     if (!options.url) throw new Error('crypto: url is required');
     if (!options.partition) throw new Error('crypto: partition is required');
-    this.url = options.url.replace(/\/$/, '');
+    this.#url = new ServerUrl(options.url);
     this.partition = options.partition;
     this.#token = resolveTenantToken(options.token);
     this.#fetch = options.fetch ?? fetch;
     this.#timeoutMs = options.timeoutMs ?? 10_000;
     this.#retries = options.retries ?? 2;
     this.#retryDelayMs = options.retryDelayMs ?? 100;
+  }
+
+  /** The server URL; `''` while a lazy one has not resolved yet (see {@link resolveUrl}). */
+  get url(): string {
+    return this.#url.current ?? '';
+  }
+
+  /** The server URL, resolving a lazy one. */
+  resolveUrl(): Promise<string> {
+    return this.#url.resolve();
   }
 
   /* ------------------------------------------------------------------------------------------ */
@@ -123,10 +144,20 @@ export class CryptoClient {
   }
 
   async #once<T>(method: string, path: string, body: unknown, tokenReset: () => void): Promise<T> {
+    let base: string;
+    try {
+      base = await this.#url.resolve();
+    } catch (error) {
+      throw new CryptoClientError(
+        0,
+        'network',
+        `crypto: could not resolve the server url: ${(error as Error).message}`,
+      );
+    }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.#timeoutMs);
     try {
-      const response = await this.#fetch(`${this.url}${path}`, {
+      const response = await this.#fetch(`${base}${path}`, {
         method,
         headers: await this.#headers(body !== undefined),
         signal: controller.signal,
@@ -143,6 +174,8 @@ export class CryptoClient {
           response.status,
           (payload.code as CryptoErrorCode | undefined) ?? 'invalid',
           payload.error ?? `crypto: the server answered ${response.status}`,
+          // A 404 the server did not explain is a route that is not there: the wrong host.
+          { unreachable: response.status === 404 && payload.code === undefined },
         );
       }
       return payload as T;
@@ -163,6 +196,7 @@ export class CryptoClient {
 
   async #request<T>(method: string, path: string, body?: unknown): Promise<T> {
     let reset = false;
+    let refreshed = false;
     const tokenReset = () => {
       reset = true;
       this.#token.reset?.();
@@ -172,6 +206,17 @@ export class CryptoClient {
         return await this.#once<T>(method, path, body, tokenReset);
       } catch (error) {
         const failure = error as CryptoClientError;
+        // A lazy URL is looked up again once per call when the server is not where it was; a new
+        // URL is worth an immediate try that does not count against the retries.
+        if (failure.unreachable && !refreshed && this.#url.lazy) {
+          refreshed = true;
+          const before = this.#url.current;
+          const after = await this.#url.refresh();
+          if (after !== undefined && after !== before) {
+            attempt -= 1;
+            continue;
+          }
+        }
         if (attempt >= this.#retries) throw failure;
         // A network error, a timeout, a 429 and a 5xx are worth another try; a 401 is worth one
         // with a fresh token (the source was reset above); any other 4xx is final.

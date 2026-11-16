@@ -12,6 +12,7 @@
     "commands",
     "mcp",
     "doctor",
+    "diagnostics",
     "transport",
     "sharing",
     "subjects",

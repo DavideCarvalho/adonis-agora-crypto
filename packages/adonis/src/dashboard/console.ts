@@ -12,7 +12,12 @@ import type { CryptoPrincipal, CryptoService } from '../crypto/service.js';
 import { parseListQuery } from '../http/list.js';
 import { resolveAccessDeniedPage } from './access_denied_page.js';
 import { type ConsoleActor, consoleActor } from './actor.js';
-import { type ConsoleAuthorizeDecision, resolveConsoleAuthorize } from './console_authorize.js';
+import {
+  type ConsoleAuthorizeDecision,
+  consoleAppAllowed,
+  consoleVisibleApps,
+  resolveConsoleAuthorize,
+} from './console_authorize.js';
 import { resolveSignOut, resolveViewer } from './console_shell.js';
 import {
   type AgoraConsoleRegistry,
@@ -66,6 +71,8 @@ class HttpError extends Error {
  */
 export class CryptoConsole {
   readonly #authorize: (ctx: HttpContext) => Promise<ConsoleAuthorizeDecision>;
+  /** The `apps` grant of each request that passed the guard. */
+  readonly #grants = new WeakMap<HttpContext, '*' | string[] | undefined>();
   #warned = false;
 
   constructor(private readonly options: CryptoConsoleOptions) {
@@ -123,7 +130,10 @@ export class CryptoConsole {
 
   async #guard(ctx: HttpContext, kind: 'api' | 'page'): Promise<boolean> {
     const decision = await this.#authorize(ctx);
-    if (decision.allowed) return true;
+    if (decision.allowed) {
+      this.#grants.set(ctx, decision.apps);
+      return true;
+    }
     if (decision.status === 302) {
       ctx.response.redirect(decision.redirectTo);
       return false;
@@ -201,6 +211,9 @@ export class CryptoConsole {
     if (this.options.config.apps && !this.options.config.apps.includes(value)) {
       throw new HttpError(403, `app "${value}" is not served by this console`);
     }
+    if (!consoleAppAllowed(value, this.options.config.apps, this.#grants.get(ctx))) {
+      throw new HttpError(403, `app "${value}" is not granted to this viewer`);
+    }
     return value;
   }
 
@@ -249,7 +262,14 @@ export class CryptoConsole {
       this.options.config.path,
       this.api,
       {
-        ...(this.options.defaultPartition ? { app: this.options.defaultPartition } : {}),
+        ...(this.options.defaultPartition &&
+        consoleAppAllowed(
+          this.options.defaultPartition,
+          this.options.config.apps,
+          this.#grants.get(ctx),
+        )
+          ? { app: this.options.defaultPartition }
+          : {}),
       },
       shell,
     );
@@ -279,10 +299,20 @@ export class CryptoConsole {
   async meta(ctx: HttpContext) {
     const actor = await this.#actor(ctx);
     const partitions = await this.options.service.store.partitions();
-    const apps = this.options.config.apps ?? partitions;
+    const grant = this.#grants.get(ctx);
     const fallback = this.options.defaultPartition;
+    // The static list (or every app the store holds), narrowed to the viewer's grant.
+    const apps = consoleVisibleApps(
+      this.options.config.apps ?? partitions,
+      this.options.config.apps,
+      grant,
+    );
+    const fallbackAllowed =
+      fallback !== undefined && consoleAppAllowed(fallback, this.options.config.apps, grant);
     const defaultPartition =
-      fallback && apps.includes(fallback) ? fallback : (apps[0] ?? fallback ?? '');
+      fallback && apps.includes(fallback)
+        ? fallback
+        : (apps[0] ?? ((fallbackAllowed && fallback) || ''));
     return ctx.response.header('cache-control', 'no-store').json({
       apps: apps.length > 0 ? apps : defaultPartition ? [defaultPartition] : [],
       defaultPartition,
@@ -444,6 +474,8 @@ export class CryptoConsole {
 export function cryptoConsoleSearchFor(
   service: CryptoService,
   base: string,
+  /** Whether the viewer may see this app (the console's static `apps` and the viewer's grant). */
+  appAllowed: (ctx: HttpContext, app: string) => Promise<boolean> = async () => true,
 ): (
   ctx: HttpContext,
   q: string,
@@ -455,7 +487,7 @@ export function cryptoConsoleSearchFor(
     const partition = query.partition ?? query.app ?? '';
     return {
       keys: async () => {
-        if (partition === '') return [];
+        if (partition === '' || !(await appAllowed(ctx, partition))) return [];
         const keys = await service.listKeys(
           { partition, capabilities: ['crypto:keys:read'], actor: 'console' },
           { page: 1, size: 200 },

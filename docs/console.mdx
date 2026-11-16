@@ -45,6 +45,24 @@ export default defineConfig({
 })
 ```
 
+### Apps per viewer
+
+`authorize` can also say which apps a viewer may operate on, with the same `apps` field as the
+telescope and flags consoles. The picker lists only those, and a request for another app is refused
+with `403`. `'*'` or no `apps` means every app; `console.apps`, when set, stays the upper bound.
+
+```ts
+authorize: async (ctx) => {
+  const user = ctx.auth.user
+  if (!user) return { allowed: false, reason: 'unauthenticated' }
+  return { allowed: true, apps: user.isAdmin ? '*' : user.apps }
+},
+// a token for scripts, limited to one app:
+// authorize: authorizeByToken({ token: env.get('CRYPTO_CONSOLE_TOKEN'), apps: ['streaming'] }),
+```
+
+The grant also applies to the ⌘K search and the MCP dev tools.
+
 Without `authorize`, the console is open outside production and denies every request in production;
 `node ace agora:doctor --lib crypto` says so. The console is also what registers the
 **console switcher** entry and the **MCP dev tools**; disable it (`console: false`) and neither is

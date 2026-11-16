@@ -7,6 +7,7 @@ import { CryptoService } from '../src/crypto/service.js';
 import { CryptoConsole, cryptoConsoleSearchFor } from '../src/dashboard/console.js';
 import {
   type ConsoleAuthorizeDecision,
+  consoleAppAllowed,
   resolveConsoleAuthorize,
 } from '../src/dashboard/console_authorize.js';
 import { readAgoraConsoles, registerAgoraConsole } from '../src/dashboard/console_switcher.js';
@@ -123,12 +124,12 @@ export default class CryptoProvider {
         await (transport ? operations.whoami() : client.whoami());
         lastCheckAt = new Date().toISOString();
         logger.info(
-          `[@adonis-agora/crypto] tenant ${config.tenant.partition} on ${transport ? `${transport.name} transport` : config.tenant.url}`,
+          `[@adonis-agora/crypto] tenant ${config.tenant.partition} on ${transport ? `${transport.name} transport` : client.url}`,
         );
       } catch (error) {
         lastError = (error as Error).message;
         logger.warn(
-          `[@adonis-agora/crypto] ${config.tenant.partition} could not reach ${config.tenant.url}: ${lastError}`,
+          `[@adonis-agora/crypto] ${config.tenant.partition} could not reach ${client.url || 'the crypto server'}: ${lastError}`,
         );
       }
     }
@@ -272,6 +273,7 @@ export default class CryptoProvider {
     runtime.subjects = new SubjectKeys({
       operations: runtime.operations,
       store,
+      ...(runtime.partition !== '' ? { app: runtime.partition } : {}),
       ...(subjects.cache !== undefined ? { cache: subjects.cache } : {}),
       ...(subjects.prefix !== undefined ? { prefix: subjects.prefix } : {}),
       ...(subjects.keyName !== undefined ? { keyName: subjects.keyName } : {}),
@@ -334,6 +336,12 @@ export default class CryptoProvider {
     } catch {
       return { info: () => {}, warn: () => {} };
     }
+  }
+
+  /** Whether this viewer may operate on `app`: the console's static `apps`, then its grant. */
+  async #appAllowed(ctx: HttpContext, app: string): Promise<boolean> {
+    const decision = await this.#authorize(ctx);
+    return decision.allowed && consoleAppAllowed(app, this.#consoleConfig?.apps, decision.apps);
   }
 
   /** The console's resolved gate, also used by the switcher and the dev tools. */
@@ -399,7 +407,9 @@ export default class CryptoProvider {
           }
           return { allowed: false, reason: decision.reason };
         },
-        search: cryptoConsoleSearchFor(service, config.path),
+        search: cryptoConsoleSearchFor(service, config.path, (ctx, app) =>
+          this.#appAllowed(ctx, app),
+        ),
       },
       logger,
     );
@@ -410,6 +420,7 @@ export default class CryptoProvider {
     if (!service) return;
     await registerCryptoDevTools(this.app.container, {
       service,
+      appAllowed: (ctx, app) => this.#appAllowed(ctx, app),
       authorize: async (ctx) => {
         const decision = await this.#authorize(ctx);
         if (decision.allowed) return { allowed: true };
@@ -454,11 +465,21 @@ export default class CryptoProvider {
     if (!envelope) return;
     const cipher = this.#envelopeCipher(config, runtime);
     const { installCryptoEnvelope } = await import('../src/http/envelope_global.js');
+    // A lazy tenant URL is resolved here, so calls to the crypto server itself are never sealed.
+    let tenantUrl: string | undefined;
+    if (config.topology === 'tenant' && typeof config.tenant.url === 'function') {
+      tenantUrl = await runtime.client?.resolveUrl().catch((error: Error) => {
+        logger.warn(
+          `[@adonis-agora/crypto] envelope: the crypto server URL did not resolve (${error.message}); only the default /_crypto path is left unsealed`,
+        );
+        return undefined;
+      });
+    }
     const installed = await installCryptoEnvelope({
       config: envelope,
       outboundCipher: cipher,
       inboundCipher: cipher,
-      skipPaths: envelopeSkipPaths(config),
+      skipPaths: envelopeSkipPaths(config, tenantUrl),
       warn: (message) => logger.warn(message),
     });
     if (!installed.inbound) return;

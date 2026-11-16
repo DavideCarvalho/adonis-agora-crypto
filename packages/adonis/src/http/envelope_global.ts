@@ -408,7 +408,7 @@ function resolveAccept(config: CryptoEnvelopeConfig): string[] {
  * another crypto call, which would need another seal. The tenant knows its server URL; a server knows
  * its mount prefix.
  */
-export function envelopeSkipPaths(config: CryptoConfig): string[] {
+export function envelopeSkipPaths(config: CryptoConfig, tenantUrl?: string): string[] {
   const paths = new Set<string>(['/_crypto']);
   const add = (value: string | undefined) => {
     if (!value) return;
@@ -416,8 +416,9 @@ export function envelopeSkipPaths(config: CryptoConfig): string[] {
     if (trimmed !== '' && trimmed.startsWith('/')) paths.add(trimmed);
   };
   if (config.topology === 'tenant') {
+    const url = typeof config.tenant.url === 'string' ? config.tenant.url : tenantUrl;
     try {
-      add(new URL(config.tenant.url).pathname);
+      if (url !== undefined) add(new URL(url).pathname);
     } catch {
       // defineConfig already refuses a relative URL; nothing to skip beyond the default.
     }

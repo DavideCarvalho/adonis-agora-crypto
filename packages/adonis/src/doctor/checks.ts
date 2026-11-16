@@ -199,11 +199,22 @@ export const agoraDoctorChecks: AgoraDoctorCheck[] = [
         token: config.tenant.token,
         retries: 0,
       });
+      let url: string;
+      try {
+        url = await client.resolveUrl();
+      } catch (error) {
+        return {
+          status: 'error',
+          message: `The crypto server URL did not resolve: ${(error as Error).message}.`,
+          fix: 'Check the `tenant.url` function (e.g. controlPlaneUrl: the issuer is up and lists urn:agora:crypto).',
+          docs: `${DOCS}/deployment`,
+        };
+      }
       try {
         const who = await client.whoami();
         return {
           status: 'ok',
-          message: `${config.tenant.url}: ${who.partition} with ${who.capabilities.join(', ') || 'no capabilities'}.`,
+          message: `${client.url || url}: ${who.partition} with ${who.capabilities.join(', ') || 'no capabilities'}.`,
         };
       } catch (error) {
         const failure = error as { status?: number; message?: string };
@@ -225,7 +236,7 @@ export const agoraDoctorChecks: AgoraDoctorCheck[] = [
         }
         return {
           status: 'error',
-          message: `${config.tenant.url} answered nothing: ${failure.message ?? 'unknown error'}.`,
+          message: `${client.url || url} answered nothing: ${failure.message ?? 'unknown error'}.`,
           fix: 'Check CRYPTO_URL (including its /_crypto prefix) and that the crypto server is running.',
           docs: `${DOCS}/deployment`,
         };

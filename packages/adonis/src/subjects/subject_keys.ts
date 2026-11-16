@@ -1,5 +1,6 @@
 import { isValidKeyName } from '@adonis-agora/crypto-core';
 import { readCiphertext } from '../crypto/ciphertext.js';
+import { emitCrypto, errorCodeOf } from '../diagnostics.js';
 import { type CachedDataKey, DataKeyCache, type DataKeyCacheOptions } from './cache.js';
 import {
   newDataKeyId,
@@ -74,6 +75,8 @@ export interface SubjectKeysOptions {
   createKeys?: 'lazy' | 'explicit';
   /** Clock, so tests can pin timestamps. */
   now?: () => string;
+  /** This app's partition, stamped as `app` on the diagnostics events subject keys publish. */
+  app?: string;
 }
 
 export interface SealOptions {
@@ -130,6 +133,7 @@ export class SubjectKeys {
   /** Rotations in flight: a cold write waits for them instead of picking the old data key. */
   readonly #rotating = new Map<string, Promise<unknown>>();
   readonly #now: () => string;
+  readonly #app: string | undefined;
   /** In-flight work, so concurrent callers share one round trip. */
   readonly #unwrapping = new Map<string, Promise<void>>();
   readonly #provisioning = new Map<string, Promise<string>>();
@@ -145,6 +149,17 @@ export class SubjectKeys {
     this.#requireType = options.requireType !== false;
     this.#lazy = (options.createKeys ?? 'lazy') === 'lazy';
     this.#now = options.now ?? (() => new Date().toISOString());
+    this.#app = options.app === '' ? undefined : options.app;
+  }
+
+  /** `subjects.cache`: whether a data key came from this process' cache (the control plane never sees a hit). */
+  #reportCache(key: string, op: 'encrypt' | 'decrypt', outcome: 'hit' | 'miss'): void {
+    const app = this.#app;
+    emitCrypto(
+      'subjects.cache',
+      () => ({ ...(app !== undefined ? { app } : {}), key, op, outcome }),
+      { app },
+    );
   }
 
   /* ------------------------------------------------------------------------------------------ */
@@ -226,6 +241,34 @@ export class SubjectKeys {
    */
   async forget(subject: SubjectRef): Promise<{ key: string; forgotten: true; dataKeys: number }> {
     const key = this.keyName(subject);
+    const started = performance.now();
+    const app = this.#app;
+    const report = (outcome: { dataKeys: number } | { error: unknown }) => {
+      const durationMs = performance.now() - started;
+      emitCrypto(
+        'subjects.forget',
+        () => ({
+          ...(app !== undefined ? { app } : {}),
+          key,
+          ...('error' in outcome
+            ? { outcome: 'error' as const, errorCode: errorCodeOf(outcome.error) }
+            : { outcome: 'ok' as const, dataKeys: outcome.dataKeys }),
+          durationMs,
+        }),
+        { app, durationMs },
+      );
+    };
+    try {
+      const result = await this.#forget(key);
+      report({ dataKeys: result.dataKeys });
+      return result;
+    } catch (error) {
+      report({ error });
+      throw error;
+    }
+  }
+
+  async #forget(key: string): Promise<{ key: string; forgotten: true; dataKeys: number }> {
     try {
       await this.#operations.deleteKey(key);
     } catch (error) {
@@ -310,7 +353,7 @@ export class SubjectKeys {
       throw new SubjectKeyError('invalid', 'crypto: plaintext must be a string');
     }
     const key = this.keyName(subject);
-    const { id, bytes } = await this.#currentDataKey(key);
+    const { id, bytes } = await this.#currentDataKey(key, 'encrypt');
     try {
       return sealWithDataKey(bytes, plaintext, { key, dataKeyId: id, aad: options.aad });
     } finally {
@@ -332,7 +375,7 @@ export class SubjectKeys {
         'crypto: decrypt needs the expected `subject` (or `anySubject: true` when the aad already binds the owner)',
       );
     }
-    const bytes = await this.#dataKey(parsed.dataKeyId, parsed.key);
+    const bytes = await this.#dataKey(parsed.dataKeyId, parsed.key, 'decrypt');
     try {
       return openWithDataKey(bytes, ciphertext, { ...parsed, aad: options.aad });
     } finally {
@@ -471,15 +514,17 @@ export class SubjectKeys {
     return Buffer.from(entry.bytes);
   }
 
-  async #dataKey(id: string, key: string): Promise<Buffer> {
+  async #dataKey(id: string, key: string, track?: 'decrypt'): Promise<Buffer> {
     this.#assertNotForgotten(key);
     const cached = this.cache.get(id);
     if (cached) {
       if (cached.key !== key) {
         throw new SubjectKeyError('invalid', 'crypto: the ciphertext names another subject key');
       }
+      if (track) this.#reportCache(key, track, 'hit');
       return this.#copy(cached);
     }
+    if (track) this.#reportCache(key, track, 'miss');
     let pending = this.#unwrapping.get(id);
     let bytes: Buffer | undefined;
     if (!pending) {
@@ -551,11 +596,15 @@ export class SubjectKeys {
     }
   }
 
-  async #currentDataKey(key: string): Promise<{ id: string; bytes: Buffer }> {
+  async #currentDataKey(key: string, track?: 'encrypt'): Promise<{ id: string; bytes: Buffer }> {
     for (let attempt = 0; ; attempt += 1) {
       this.#assertNotForgotten(key);
       const cached = this.cache.current(key);
-      if (cached) return { id: cached.id, bytes: this.#copy(cached) };
+      if (cached) {
+        if (track && attempt === 0) this.#reportCache(key, track, 'hit');
+        return { id: cached.id, bytes: this.#copy(cached) };
+      }
+      if (track && attempt === 0) this.#reportCache(key, track, 'miss');
       const rotation = this.#rotating.get(key);
       if (rotation) {
         await rotation.catch(() => {});

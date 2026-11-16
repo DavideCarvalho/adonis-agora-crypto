@@ -42,16 +42,21 @@ function router(routes: Route[]) {
   };
 }
 
-async function start(options: { authorize?: boolean; path?: string } = {}) {
+async function start(
+  options: { authorize?: boolean; path?: string; grant?: '*' | string[]; apps?: string[] } = {},
+) {
   const crypto = memoryCrypto();
   const console = new CryptoConsole({
     service: crypto.service,
     config: resolveDashboardConfig({
       ...(options.path !== undefined ? { path: options.path } : {}),
+      ...(options.apps !== undefined ? { apps: options.apps } : {}),
       authorize: () =>
         options.authorize === false
           ? { allowed: false as const, status: 403 as const, reason: 'forbidden' as const }
-          : { allowed: true as const },
+          : options.grant !== undefined
+            ? { allowed: true as const, apps: options.grant }
+            : { allowed: true as const },
     }),
     spaDir: '/nowhere',
     defaultPartition: 'shop',
@@ -161,6 +166,54 @@ describe('console API', () => {
     expect(missing.status).toBe(404);
     const bad = await fetch(`${base}/_crypto/api/keys?partition=shop`, json('POST', {}));
     expect(bad.status).toBe(400);
+  });
+});
+
+describe('console per-viewer apps', () => {
+  async function seeded(options: Parameters<typeof start>[0]) {
+    const started = await start(options);
+    for (const partition of ['shop', 'blog', 'admin']) {
+      await started.crypto.service.createKey(
+        { partition, capabilities: ['crypto:*'], actor: 'test' },
+        { name: 'orders', type: 'aes256-gcm' },
+      );
+    }
+    return started;
+  }
+
+  it('lists and serves only the apps the viewer was granted', async () => {
+    const { base } = await seeded({ grant: ['blog'] });
+    const meta = (await (await fetch(`${base}/_crypto/api/meta`)).json()) as {
+      apps: string[];
+      defaultPartition: string;
+    };
+    expect(meta.apps).toEqual(['blog']);
+    expect(meta.defaultPartition).toBe('blog');
+    expect((await fetch(`${base}/_crypto/api/keys?partition=blog`)).status).toBe(200);
+    const refused = await fetch(`${base}/_crypto/api/keys?partition=shop`);
+    expect(refused.status).toBe(403);
+    // The default app is not a way around the grant either.
+    expect((await fetch(`${base}/_crypto/api/keys`)).status).toBe(403);
+    const write = await fetch(
+      `${base}/_crypto/api/keys?partition=admin`,
+      json('POST', { name: 'x', type: 'aes256-gcm' }),
+    );
+    expect(write.status).toBe(403);
+  });
+
+  it("keeps the static `apps` as the upper bound, and '*' or no grant means all of them", async () => {
+    const bounded = await seeded({ grant: ['blog', 'admin'], apps: ['shop', 'blog'] });
+    const meta = (await (await fetch(`${bounded.base}/_crypto/api/meta`)).json()) as {
+      apps: string[];
+    };
+    expect(meta.apps).toEqual(['blog']);
+    expect((await fetch(`${bounded.base}/_crypto/api/keys?partition=admin`)).status).toBe(403);
+
+    const all = await seeded({ grant: '*' });
+    const everything = (await (await fetch(`${all.base}/_crypto/api/meta`)).json()) as {
+      apps: string[];
+    };
+    expect([...everything.apps].sort()).toEqual(['admin', 'blog', 'shop']);
   });
 });
 
