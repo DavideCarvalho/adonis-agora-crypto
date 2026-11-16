@@ -55,11 +55,18 @@ export interface EncryptedColumnOptions<Model = unknown> {
   onLegacyRead?: (model: Model, attribute: string) => void;
   /**
    * What a value that cannot be opened becomes: `throw` (default) fails the query; `null` sets the
-   * attribute to `null` and lists it in `model.$extras.agoraUndecryptable` (a listing that may hold
-   * rows of forgotten subjects). Applies to `forgotten` and `invalid` failures only: an unreachable
-   * crypto server (`unavailable`) or a refused token (`denied`) always throws.
+   * attribute to `null` when its subject was **forgotten**, and lists it in
+   * `model.$extras.agoraUndecryptable` (a listing that may hold rows of forgotten subjects).
+   * `{ null: ['forgotten', 'invalid'] }` also nulls `invalid` values — tampered, swapped or injected
+   * ones — which hides tampering: alert from `onUndecryptableError` if you do. An unreachable crypto
+   * server (`unavailable`) or a refused token (`denied`) always throws.
+   *
+   * A nulled attribute cannot be saved as `null` (that would destroy the stored value by accident):
+   * set a real value, or clear the column with a query-builder update.
    */
-  onUndecryptable?: 'throw' | 'null';
+  onUndecryptable?: 'throw' | 'null' | { null: Array<'forgotten' | 'invalid'> };
+  /** Called for every value that cannot be opened, whether it then throws or is nulled. */
+  onUndecryptableError?: (model: Model, attribute: string, error: SubjectKeyError) => void;
   /**
    * What binds a ciphertext to its row (into the AAD, next to table and column): the primary key by
    * default, so a value copied to another row does not open. The key must be known before the
@@ -138,6 +145,8 @@ interface Pending {
 const pending = new WeakMap<object, Map<string, Pending>>();
 /** The binding (subject key + AAD) each attribute was last sealed or opened with. */
 const sealedWith = new WeakMap<object, Map<string, string>>();
+/** Attributes `onUndecryptable` set to null: the stored value is still there. */
+const nulled = new WeakMap<object, Set<string>>();
 /** A marker that makes an attribute dirty so Lucid writes it. */
 const FORCE_WRITE = Symbol('crypto.force-write');
 
@@ -306,10 +315,26 @@ async function sealHook(model: LucidModelInstance): Promise<void> {
     return { attribute, column, options, now, was };
   });
 
+  const unreadable = nulled.get(model);
+  for (const { attribute } of plan) {
+    if (!unreadable?.has(attribute) || !(attribute in dirty)) continue;
+    const value = model.$attributes[attribute];
+    if (value === null || value === undefined) {
+      throw new SubjectKeyError(
+        'invalid',
+        `crypto: ${Model.name}.${attribute} could not be opened and was read as null; saving null would destroy the stored value. Set a real value, or clear it with a query-builder update`,
+      );
+    }
+  }
+
   for (const { attribute, now, was } of plan) {
     if (!was || was.signature === now.signature) continue;
     const value = model.$attributes[attribute];
-    if (!(attribute in model.$attributes) || value instanceof SealedValue) {
+    if (
+      !(attribute in model.$attributes) ||
+      value instanceof SealedValue ||
+      (unreadable?.has(attribute) && !(attribute in dirty))
+    ) {
       throw new SubjectKeyError(
         'invalid',
         `crypto: ${Model.name}.${attribute} is not loaded, but the row's subject or id changed: load every encrypted column before moving a row (it would stay sealed for the old owner)`,
@@ -357,11 +382,27 @@ function afterSaveHook(model: LucidModelInstance): void {
   pending.delete(model);
   if (!stash) return;
   for (const [attribute, entry] of stash) {
-    if (entry.used) remember(model, attribute, entry.binding);
+    if (entry.used) {
+      remember(model, attribute, entry.binding);
+      nulled.get(model)?.delete(attribute);
+    }
   }
 }
 
+function nullable(options: EncryptedColumnOptions): ReadonlyArray<string> {
+  const setting = options.onUndecryptable;
+  if (setting === 'null') return ['forgotten'];
+  if (setting && typeof setting === 'object') return setting.null;
+  return [];
+}
+
 function undecryptable(model: LucidModelInstance, attribute: string): void {
+  let set = nulled.get(model);
+  if (!set) {
+    set = new Set();
+    nulled.set(model, set);
+  }
+  set.add(attribute);
   model.$attributes[attribute] = null;
   model.$original[attribute] = null;
   if (model.$extras) {
@@ -383,8 +424,9 @@ async function openHook(result: LucidModelInstance | LucidModelInstance[]): Prom
       if (!(value instanceof SealedValue)) continue;
       work.push(
         openOne(model, Model, attribute, column, options, value).catch((error: unknown) => {
-          const code = error instanceof SubjectKeyError ? error.code : undefined;
-          if (options.onUndecryptable === 'null' && (code === 'forgotten' || code === 'invalid')) {
+          if (!(error instanceof SubjectKeyError)) throw error;
+          options.onUndecryptableError?.(model as never, attribute, error);
+          if (nullable(options).includes(error.code)) {
             undecryptable(model, attribute);
             return;
           }
@@ -454,7 +496,7 @@ function openRaw(
   options: EncryptedColumnOptions,
   raw: unknown,
 ): void {
-  if (typeof raw === 'string' && raw.startsWith('agora:')) {
+  if (typeof raw === 'string' && raw.toLowerCase().startsWith('agora:')) {
     throw new SubjectKeyError(
       'invalid',
       `crypto: ${Model.name}.${attribute} holds another kind of agora ciphertext, not a subject value`,

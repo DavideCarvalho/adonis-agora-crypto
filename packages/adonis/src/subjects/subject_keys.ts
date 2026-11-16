@@ -61,8 +61,10 @@ export interface SubjectKeysOptions {
   /** Full control over the key name (must match `^[a-z][a-z0-9_-]{0,62}$`). Overrides `prefix`. */
   keyName?: (id: SubjectId, type: string | undefined) => string;
   /**
-   * Refuse bare ids: every subject must be `{ type, id }`. Recommended as soon as more than one kind
-   * of entity owns data, so researcher 7 and project 7 never share a key. Default `false`.
+   * Refuse bare ids: every subject must be `{ type, id }` (or come from a column `namespace`), so
+   * researcher 7 and project 7 never share a key. Default `true`; `false` allows bare ids (one kind
+   * of subject only), and even then a bare string id containing `_` is refused, so it can never name
+   * a typed subject's key.
    */
   requireType?: boolean;
   /**
@@ -125,6 +127,8 @@ export class SubjectKeys {
   readonly #forgotten = new Set<string>();
   /** Bumped by `rotateDataKey` and `forget`: an in-flight provision older than this is stale. */
   readonly #epochs = new Map<string, number>();
+  /** Rotations in flight: a cold write waits for them instead of picking the old data key. */
+  readonly #rotating = new Map<string, Promise<unknown>>();
   readonly #now: () => string;
   /** In-flight work, so concurrent callers share one round trip. */
   readonly #unwrapping = new Map<string, Promise<void>>();
@@ -138,7 +142,7 @@ export class SubjectKeys {
     );
     this.#prefix = options.prefix ?? 'subject_';
     this.#keyName = options.keyName;
-    this.#requireType = options.requireType === true;
+    this.#requireType = options.requireType !== false;
     this.#lazy = (options.createKeys ?? 'lazy') === 'lazy';
     this.#now = options.now ?? (() => new Date().toISOString());
   }
@@ -146,6 +150,21 @@ export class SubjectKeys {
   /* ------------------------------------------------------------------------------------------ */
   /* Subjects                                                                                    */
   /* ------------------------------------------------------------------------------------------ */
+
+  /** The key prefix (`subject_` by default). */
+  get prefix(): string {
+    return this.#prefix;
+  }
+
+  /** Whether key names come from a custom `keyName` function. */
+  get hasCustomKeyName(): boolean {
+    return this.#keyName !== undefined;
+  }
+
+  /** Whether bare subject ids are refused (`requireType`). */
+  get requiresType(): boolean {
+    return this.#requireType;
+  }
 
   /** The control-plane key name of a subject. Throws `invalid` for an id that cannot be one. */
   keyName(subject: SubjectRef): string {
@@ -171,6 +190,13 @@ export class SubjectKeys {
     }
     if (typeof id !== 'string' && typeof id !== 'number') {
       throw new SubjectKeyError('invalid', 'crypto: a subject id is a string or a number');
+    }
+    if (type === undefined && typeof id === 'string' && id.includes('_')) {
+      // `researcher_7` would be the key of { type: 'researcher', id: 7 }.
+      throw new SubjectKeyError(
+        'invalid',
+        'crypto: a bare subject id cannot contain "_" (it could name a typed subject’s key); use { type, id }',
+      );
     }
     const name = this.#keyName
       ? this.#keyName(id, type)
@@ -254,7 +280,18 @@ export class SubjectKeys {
     this.#bump(key);
     this.#provisioning.delete(key);
     this.cache.forgetCurrent(key);
-    const retired = await this.store.retire(key, this.#now());
+    const retiring = this.store.retire(key, this.#now());
+    this.#rotating.set(key, retiring);
+    let retired: number;
+    try {
+      retired = await retiring;
+    } finally {
+      if (this.#rotating.get(key) === retiring) this.#rotating.delete(key);
+    }
+    // Again once the retirement is visible: a provision that started while it was in flight read
+    // the old data key as current, and must neither stay cached as current nor be handed out.
+    this.#bump(key);
+    this.#provisioning.delete(key);
     this.cache.forgetCurrent(key);
     return { key, retired };
   }
@@ -519,6 +556,11 @@ export class SubjectKeys {
       this.#assertNotForgotten(key);
       const cached = this.cache.current(key);
       if (cached) return { id: cached.id, bytes: this.#copy(cached) };
+      const rotation = this.#rotating.get(key);
+      if (rotation) {
+        await rotation.catch(() => {});
+        continue;
+      }
       if (!this.cache.enabled) return this.#provisionUncached(key);
       const epoch = this.#epoch(key);
       let pending = this.#provisioning.get(key);

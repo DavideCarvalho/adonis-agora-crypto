@@ -42,10 +42,18 @@ export interface BackfillOptions {
   /** A Lucid query client or transaction (default: the model's connection). */
   client?: unknown;
   /**
-   * A value that cannot be processed (does not open, not JSON, no subject…): `throw` (default)
-   * stops the run; `skip` leaves it as it is, counts it in `failed` and lists it in `failures`.
+   * A value that cannot be processed (`invalid`: does not open, not JSON, no subject…; or
+   * `forgotten`): `throw` (default) stops the run; `skip` leaves it as it is, counts it in `failed`
+   * and lists it in `failures`. An unreachable crypto server or a refused token always stops it.
    */
   onError?: 'throw' | 'skip';
+  /**
+   * Re-seal values sealed for another subject than their row's (e.g. after a query-builder update
+   * of the subject column) for the row's subject. Default `false`: they are counted in `moved` and
+   * left alone, for a person to look at. Only possible with row binding, which proves the value
+   * belongs to the row.
+   */
+  adoptMoved?: boolean;
   /** Called after each batch, with the running totals and the cursor to resume from. */
   onBatch?: (progress: BackfillResult) => void | Promise<void>;
 }
@@ -66,11 +74,10 @@ export interface BackfillResult {
   encrypted: number;
   /** Values re-encrypted under the subject's current data key (`rotate`). */
   reencrypted: number;
-  /**
-   * Values that were sealed for another subject than their row's and were re-sealed for the row's
-   * subject (only with row binding, which proves the value belongs to that row).
-   */
+  /** Values sealed for another subject than their row's (left alone unless `adoptMoved`). */
   moved: number;
+  /** Of those, the ones re-sealed for the row's subject (`adoptMoved`). */
+  adopted: number;
   /** Values already right (or null). */
   unchanged: number;
   /** Values that changed under the backfill (a concurrent write won; nothing was overwritten). */
@@ -83,7 +90,7 @@ export interface BackfillResult {
   cursor?: string | number;
 }
 
-type Outcome = 'encrypted' | 'reencrypted' | 'moved' | 'unchanged' | 'conflicts';
+type Outcome = 'encrypted' | 'reencrypted' | 'moved' | 'adopted' | 'unchanged' | 'conflicts';
 
 function affected(result: unknown): number {
   if (typeof result === 'number') return result;
@@ -136,6 +143,7 @@ export async function backfillEncryptedColumns(
     encrypted: 0,
     reencrypted: 0,
     moved: 0,
+    adopted: 0,
     unchanged: 0,
     conflicts: 0,
     failed: 0,
@@ -166,9 +174,17 @@ export async function backfillEncryptedColumns(
       if (!model) throw new SubjectKeyError('invalid', `crypto: could not hydrate a ${Model.name}`);
       for (const column of columns) {
         try {
-          result[await fillOne(Model, model, row, pk, column, options, query)] += 1;
+          const outcome = await fillOne(Model, model, row, pk, column, options, query);
+          result[outcome] += 1;
+          if (outcome === 'adopted') result.moved += 1;
         } catch (error) {
-          if (options.onError !== 'skip' || !(error instanceof SubjectKeyError)) throw error;
+          if (
+            options.onError !== 'skip' ||
+            !(error instanceof SubjectKeyError) ||
+            (error.code !== 'invalid' && error.code !== 'forgotten')
+          ) {
+            throw error;
+          }
           result.failed += 1;
           if (result.failures.length < 100) {
             result.failures.push({
@@ -227,6 +243,7 @@ async function fillOne(
     const parsed = readSubjectCiphertext(raw);
     if (!parsed) throw new SubjectKeyError('invalid', `crypto: ${where} is malformed`);
     if (parsed.key !== expected) {
+      if (!options.adoptMoved) return 'moved';
       if (!rowBound) {
         // Without row binding nothing proves the value belongs to this row: refuse to adopt it.
         throw new SubjectKeyError(
@@ -236,14 +253,14 @@ async function fillOne(
       }
       // Opening checks the row binding: a value moved here from another row fails.
       plaintext = await subjects.decrypt(raw, { aad, anySubject: true });
-      outcome = 'moved';
+      outcome = 'adopted';
     } else if (options.rotate && (await subjects.needsReencrypt(raw, subject))) {
       plaintext = await subjects.decrypt(raw, { aad, subject });
       outcome = 'reencrypted';
     } else {
       return 'unchanged';
     }
-  } else if ((raw as string).startsWith('agora:')) {
+  } else if ((raw as string).toLowerCase().startsWith('agora:')) {
     throw new SubjectKeyError(
       'invalid',
       `crypto: ${where} holds another kind of agora ciphertext; it is not plaintext`,

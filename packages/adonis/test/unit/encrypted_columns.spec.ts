@@ -255,13 +255,29 @@ for (const dialect of dialects) {
         await database.rawQuery(
           `CREATE TABLE guarded (id varchar(36) PRIMARY KEY, researcher_id integer NOT NULL, body text NULL, CHECK ${check})`,
         );
+        await database.rawQuery(
+          `CREATE TABLE guarded_nullable (id varchar(36) PRIMARY KEY, researcher_id integer NULL, body text NULL, CHECK ${check})`,
+        );
       } else {
         await database.rawQuery(
           `CREATE TABLE ${table('guarded')} (id varchar(36) PRIMARY KEY, researcher_id integer NOT NULL, body text NULL)`,
         );
+        // Schema-qualified: nothing here depends on search_path.
         await database.rawQuery(
           addEncryptedColumnCheck({
-            table: 'guarded',
+            table: `${schema}.guarded`,
+            column: 'body',
+            subjectColumn: 'researcher_id',
+            dialect,
+          }),
+        );
+        await database.rawQuery(
+          `CREATE TABLE ${table('guarded_nullable')} (id varchar(36) PRIMARY KEY, researcher_id integer NULL, body text NULL)`,
+        );
+        await database.rawQuery(
+          addEncryptedColumnCheck({
+            table: 'guarded_nullable',
+            schema,
             column: 'body',
             subjectColumn: 'researcher_id',
             dialect,
@@ -292,6 +308,7 @@ for (const dialect of dialects) {
           return fn(...args);
         }) as T;
       subjects = new SubjectKeys({
+        requireType: false,
         operations: {
           generateDataKey: failing(operations.generateDataKey),
           decrypt: failing(operations.decrypt),
@@ -306,6 +323,7 @@ for (const dialect of dialects) {
       await database.rawQuery(`DELETE FROM ${table('surveys')}`);
       await database.rawQuery(`DELETE FROM ${table('docs')}`);
       await database.rawQuery(`DELETE FROM ${table('guarded')}`);
+      await database.rawQuery(`DELETE FROM ${table('guarded_nullable')}`);
       legacySeen = [];
       await database.rawQuery(`DELETE FROM ${table('crypto_data_keys')}`);
     });
@@ -609,6 +627,7 @@ for (const dialect of dialects) {
         return dialect === 'postgres' ? inSchema(conn, schema) : conn;
       });
       subjects = new SubjectKeys({
+        requireType: false,
         operations: localOperations(crypto.service, crypto.principal),
         store: resolved,
       });
@@ -789,12 +808,19 @@ for (const dialect of dialects) {
         onError: 'skip',
       });
       expect(result.failed).toBe(2);
+      // Sealed for another subject: reported, left alone until someone adopts it explicitly.
+      expect(result).toMatchObject({ moved: 1, adopted: 0 });
+      await expect(Note.findOrFail(moved)).rejects.toThrow(/another subject/);
+      const adopted = await backfillEncryptedColumns(LegacyNote as unknown as BackfillModel, {
+        onError: 'skip',
+        adoptMoved: true,
+      });
+      expect(adopted).toMatchObject({ moved: 1, adopted: 1 });
       expect(result.failures.map((f) => `${f.id}:${f.attribute}:${f.code}`).sort()).toEqual([
         `${badJson}:answers:invalid`,
         `${ct1}:body:invalid`,
       ]);
       expect(JSON.stringify(result.failures)).not.toContain('not json');
-      expect(result.moved).toBe(1);
       expect((await Note.findOrFail(moved)).body).toBe('mine');
       const [row] = await raw(`SELECT body FROM ${table('notes')} WHERE id = ?`, [ct1]);
       expect(row!.body).toBe('agora:ct1:pii:1:abc');
@@ -808,8 +834,13 @@ for (const dialect of dialects) {
       const result = await backfillEncryptedColumns(Survey as unknown as BackfillModel, {
         onError: 'skip',
       });
-      expect(result).toMatchObject({ moved: 0, failed: 1 });
-      expect(result.failures[0]!.message).toMatch(/no row binding/);
+      expect(result).toMatchObject({ moved: 1, adopted: 0, failed: 0 });
+      const adopting = await backfillEncryptedColumns(Survey as unknown as BackfillModel, {
+        onError: 'skip',
+        adoptMoved: true,
+      });
+      expect(adopting).toMatchObject({ adopted: 0, failed: 1 });
+      expect(adopting.failures[0]!.message).toMatch(/no row binding/);
     });
 
     it.skipIf(dialect !== 'postgres')(
@@ -829,6 +860,129 @@ for (const dialect of dialects) {
         expect(result.failures[0]!.message).toMatch(/not stored as text/);
       },
     );
+
+    it('the CHECK refuses a value on a row whose subject is NULL, and refuses upper-case prefixes', async () => {
+      await expect(
+        database.rawQuery(
+          `INSERT INTO ${table('guarded_nullable')} (id, researcher_id, body) VALUES (?, NULL, 'PLAINTEXT SECRET')`,
+          [randomUUID()],
+        ),
+      ).rejects.toThrow();
+      await expect(
+        database.rawQuery(
+          `INSERT INTO ${table('guarded_nullable')} (id, researcher_id, body) VALUES (?, NULL, 'agora:se1:subject_1:x')`,
+          [randomUUID()],
+        ),
+      ).rejects.toThrow();
+      await database.rawQuery(
+        `INSERT INTO ${table('guarded_nullable')} (id, researcher_id, body) VALUES (?, NULL, NULL)`,
+        [randomUUID()],
+      );
+      for (const value of [
+        'AGORA:SE1:plaintext',
+        'agora:se1:SUBJECT_1:x',
+        'Agora:se1:subject_1:x',
+      ]) {
+        await expect(
+          database.rawQuery(
+            `INSERT INTO ${table('guarded')} (id, researcher_id, body) VALUES (?, 1, ?)`,
+            [randomUUID(), value],
+          ),
+        ).rejects.toThrow();
+      }
+    });
+
+    it('an upper-case AGORA: prefix is never served as legacy plaintext nor encrypted by the backfill', async () => {
+      const id = randomUUID();
+      await database.rawQuery(
+        `INSERT INTO ${table('notes')} (id, researcher_id, title, body) VALUES (?, 1, 't', 'AGORA:SE1:injected')`,
+        [id],
+      );
+      await expect(LegacyNote.findOrFail(id)).rejects.toThrow(/another kind of agora ciphertext/);
+      const result = await backfillEncryptedColumns(LegacyNote as unknown as BackfillModel, {
+        onError: 'skip',
+        columns: ['body'],
+      });
+      expect(result.failed).toBe(1);
+      const [row] = await raw(`SELECT body FROM ${table('notes')} WHERE id = ?`, [id]);
+      expect(row!.body).toBe('AGORA:SE1:injected');
+    });
+
+    it('onUndecryptable: null covers forgotten only; invalid needs an explicit opt-in; every failure is reported', async () => {
+      const seen: string[] = [];
+      class Strict extends BaseModel {
+        static override table = 'docs';
+        static override selfAssignPrimaryKey = true;
+        @column({ isPrimary: true }) declare id: string;
+        @column() declare slug: string;
+        @column() declare researcherId: number;
+        @encrypted({
+          subject: (doc: Strict) => doc.researcherId,
+          namespace: 'researcher',
+          row: (doc: Strict) => doc.slug,
+          onUndecryptable: 'null',
+          onUndecryptableError: (_doc, attribute, error) =>
+            void seen.push(`${attribute}:${error.code}`),
+          using: () => subjects,
+        })
+        declare body: string | null;
+      }
+      class Lenient extends BaseModel {
+        static override table = 'docs';
+        static override selfAssignPrimaryKey = true;
+        @column({ isPrimary: true }) declare id: string;
+        @column() declare slug: string;
+        @column() declare researcherId: number;
+        @encrypted({
+          subject: (doc: Lenient) => doc.researcherId,
+          namespace: 'researcher',
+          row: (doc: Lenient) => doc.slug,
+          onUndecryptable: { null: ['forgotten', 'invalid'] },
+          using: () => subjects,
+        })
+        declare body: string | null;
+      }
+      const a = await Doc.create({ id: randomUUID(), slug: 'a', researcherId: 1, body: 'A' });
+      const b = await Doc.create({ id: randomUUID(), slug: 'b', researcherId: 1, body: 'B' });
+      // Swap a's ciphertext into b: tampering, not forgetting.
+      const [rowA] = await raw(`SELECT body FROM ${table('docs')} WHERE id = ?`, [a.id]);
+      await database.rawQuery(`UPDATE ${table('docs')} SET body = ? WHERE id = ?`, [
+        rowA!.body,
+        b.id,
+      ]);
+      await expect(Strict.findOrFail(b.id)).rejects.toThrow(SubjectKeyError);
+      expect(seen).toEqual(['body:invalid']);
+      const lenient = await Lenient.findOrFail(b.id);
+      expect(lenient.body).toBeNull();
+      expect(lenient.$extras[UNDECRYPTABLE_EXTRA]).toEqual(['body']);
+    });
+
+    it('a value nulled by onUndecryptable cannot be saved back as null by accident', async () => {
+      const doc = await Doc.create({ id: randomUUID(), slug: 'z', researcherId: 1, body: 'kept' });
+      await subjects.forget({ type: 'researcher', id: 1 });
+      const loaded = await Doc.findOrFail(doc.id);
+      expect(loaded.body).toBeNull();
+      // fill() drops the attribute, which Lucid writes as NULL: refused.
+      loaded.fill({ id: doc.id, slug: 'z', researcherId: 1 });
+      await expect(loaded.save()).rejects.toThrow(/would destroy the stored value/);
+      const [row] = await raw(`SELECT body FROM ${table('docs')} WHERE id = ?`, [doc.id]);
+      expect(String(row!.body).startsWith('agora:se1:')).toBe(true);
+      // Saving other columns without touching it is fine.
+      const again = await Doc.findOrFail(doc.id);
+      again.slug = 'z';
+      await again.save();
+    });
+
+    it('--skip-errors still stops on an outage', async () => {
+      await database.rawQuery(
+        `INSERT INTO ${table('notes')} (id, researcher_id, title, body) VALUES (?, 1, 't', 'plain')`,
+        [randomUUID()],
+      );
+      down = true;
+      await expect(
+        backfillEncryptedColumns(LegacyNote as unknown as BackfillModel, { onError: 'skip' }),
+      ).rejects.toThrow(/unavailable/);
+    });
 
     it('backfill refuses unknown columns', async () => {
       await expect(

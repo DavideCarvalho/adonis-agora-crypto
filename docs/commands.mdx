@@ -41,7 +41,7 @@ app's own name.
 
 | Command | What it does |
 | --- | --- |
-| `crypto:subjects:backfill <model> [--batch-size N] [--from <cursor>] [--rotate] [--dry-run] [--column <attr>] [--skip-errors]` | encrypt a model's [encrypted columns](/docs/crypto/subjects) in place, in batches; resumable |
+| `crypto:subjects:backfill <model> [--batch-size N] [--from <cursor>] [--rotate] [--dry-run] [--column <attr>] [--skip-errors] [--adopt-moved]` | encrypt a model's [encrypted columns](/docs/crypto/subjects) in place, in batches; resumable |
 | `crypto:subjects:rewrap-keys [--subject <id> [--type <type>]] [--from <id>]` | rewrap stored data keys under the latest subject-key version |
 | `crypto:subjects:forget <subject> [--type <type>] [--force]` | delete a subject's key: its data becomes unrecoverable (asks first) |
 

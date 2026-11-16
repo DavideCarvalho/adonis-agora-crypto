@@ -61,6 +61,12 @@ export class CryptoSubjectsBackfill extends SubjectsCommand {
   })
   declare skipErrors: boolean;
 
+  @flags.boolean({
+    description:
+      'Re-seal values sealed for another subject than their row’s (default: report only)',
+  })
+  declare adoptMoved: boolean;
+
   override async run(): Promise<void> {
     try {
       subjectsOf();
@@ -70,6 +76,7 @@ export class CryptoSubjectsBackfill extends SubjectsCommand {
         // Kept as text: the database compares it with the key ("0042" must not become 42).
         ...(this.from !== undefined ? { after: this.from } : {}),
         ...(this.skipErrors ? { onError: 'skip' as const } : {}),
+        ...(this.adoptMoved ? { adoptMoved: true } : {}),
         ...(this.rotate ? { rotate: true } : {}),
         ...(this.dryRun ? { dryRun: true } : {}),
         ...(this.column?.length ? { columns: this.column } : {}),
@@ -85,11 +92,11 @@ export class CryptoSubjectsBackfill extends SubjectsCommand {
         return;
       }
       this.logger.success(
-        `${this.dryRun ? '[dry run] ' : ''}${result.rows} rows: ${result.encrypted} encrypted, ${result.reencrypted} re-encrypted, ${result.moved} moved to their row's subject, ${result.unchanged} unchanged, ${result.failed} failed, ${result.conflicts} conflicts`,
+        `${this.dryRun ? '[dry run] ' : ''}${result.rows} rows: ${result.encrypted} encrypted, ${result.reencrypted} re-encrypted, ${result.moved} sealed for another subject (${result.adopted} adopted), ${result.unchanged} unchanged, ${result.failed} failed, ${result.conflicts} conflicts`,
       );
-      if (result.moved > 0) {
+      if (result.moved > result.adopted) {
         this.logger.warning(
-          'some values were sealed for another subject than their row (a query-builder update of the subject column?): they were re-sealed for the row',
+          'some values are sealed for another subject than their row (a query-builder update of the subject column?); they were left alone. Check them, then rerun with --adopt-moved',
         );
       }
       for (const failure of result.failures) {

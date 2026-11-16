@@ -45,6 +45,7 @@ function setup(options: { cache?: ConstructorParameters<typeof DataKeyCache>[0] 
   const store = new MemoryDataKeyStore();
   const remote = flaky(localOperations(crypto.service, crypto.principal));
   const subjects = new SubjectKeys({
+    requireType: false,
     operations: remote.ops,
     store,
     ...(options.cache !== undefined ? { cache: options.cache } : {}),
@@ -232,6 +233,7 @@ describe('SubjectKeys', () => {
     const crypto = memoryCrypto();
     const remote = flaky(localOperations(crypto.service, crypto.principal));
     const subjects = new SubjectKeys({
+      requireType: false,
       operations: remote.ops,
       store: new MemoryDataKeyStore(),
       cache: { ttlMs: 1000, now: () => now },
@@ -324,7 +326,7 @@ describe('SubjectKeys', () => {
   });
 
   it('createKeys: explicit refuses unknown subjects until create()', async () => {
-    const { subjects } = memorySubjectKeys({ createKeys: 'explicit' });
+    const { subjects } = memorySubjectKeys({ createKeys: 'explicit', requireType: false });
     expect((await rejection(subjects.encrypt(1, 'x'))).code).toBe('invalid');
     expect(await subjects.create(1)).toEqual({ key: 'subject_1', created: true });
     expect(await subjects.create(1)).toEqual({ key: 'subject_1', created: false });
@@ -423,6 +425,7 @@ describe('SubjectKeys', () => {
     let gated = false;
     const store = new MemoryDataKeyStore();
     const subjects = new SubjectKeys({
+      requireType: false,
       operations: {
         ...operations,
         generateDataKey: async (input) => {
@@ -454,6 +457,7 @@ describe('SubjectKeys', () => {
     let gate: Promise<void> | undefined;
     let release!: () => void;
     const subjects = new SubjectKeys({
+      requireType: false,
       operations: {
         ...operations,
         decrypt: async (input) => {
@@ -486,7 +490,11 @@ describe('SubjectKeys', () => {
     const crypto = memoryCrypto();
     const store = new MemoryDataKeyStore();
     const make = () =>
-      new SubjectKeys({ operations: localOperations(crypto.service, crypto.principal), store });
+      new SubjectKeys({
+        requireType: false,
+        operations: localOperations(crypto.service, crypto.principal),
+        store,
+      });
     const a = make();
     const b = make();
     const [fromA, fromB] = await Promise.all([a.encrypt(1, 'from a'), b.encrypt(1, 'from b')]);
@@ -518,6 +526,7 @@ describe('SubjectKeys', () => {
       deletionAllowed: true,
     });
     const subjects = new SubjectKeys({
+      requireType: false,
       operations: localOperations(crypto.service, crypto.principal),
       store: new MemoryDataKeyStore(),
     });
@@ -532,6 +541,59 @@ describe('SubjectKeys', () => {
     await expect(crypto.service.deleteKey(crypto.principal, 'orders')).rejects.toThrow(/lacks/);
   });
 
+  it('a provision that starts while retire is still in flight does not keep the retired key current', async () => {
+    const crypto = memoryCrypto();
+    const inner = new MemoryDataKeyStore();
+    let releaseRetire!: () => void;
+    let retireGate: Promise<void> | undefined;
+    const store = Object.assign(Object.create(inner) as MemoryDataKeyStore, {
+      retire: async (key: string, at: string) => {
+        if (retireGate) await retireGate;
+        return inner.retire(key, at);
+      },
+      current: (key: string) => inner.current(key),
+      get: (id: string) => inner.get(id),
+      insert: (record: Parameters<MemoryDataKeyStore['insert']>[0]) => inner.insert(record),
+    });
+    const operations = localOperations(crypto.service, crypto.principal);
+    const subjects = new SubjectKeys({
+      requireType: false,
+      operations: {
+        ...operations,
+        decrypt: async (input) => {
+          await new Promise((resolve) => setTimeout(resolve, 2));
+          return operations.decrypt(input);
+        },
+      },
+      store,
+    });
+    const first = readSubjectCiphertext(await subjects.encrypt(1, 'a'))!;
+    subjects.clear();
+    retireGate = new Promise<void>((resolve) => {
+      releaseRetire = resolve;
+    });
+    const rotation = subjects.rotateDataKey(1);
+    const write = subjects.encrypt(1, 'b');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    releaseRetire();
+    await rotation;
+    const second = readSubjectCiphertext(await write)!;
+    expect(second.dataKeyId).not.toBe(first.dataKeyId);
+    expect(subjects.cache.current('subject_1')?.id).not.toBe(first.dataKeyId);
+    expect(readSubjectCiphertext(await subjects.encrypt(1, 'c'))!.dataKeyId).not.toBe(
+      first.dataKeyId,
+    );
+  });
+
+  it('requires typed subjects by default and refuses bare ids that could name a typed key', () => {
+    const { subjects } = memorySubjectKeys();
+    expect(() => subjects.keyName(7)).toThrow(/requireType/);
+    const loose = memorySubjectKeys({ requireType: false }).subjects;
+    expect(() => loose.keyName('researcher_7')).toThrow(/cannot contain "_"/);
+    expect(loose.keyName('researcher-7')).toBe('subject_researcher-7');
+    expect(loose.keyName({ type: 'researcher', id: 7 })).toBe('subject_researcher_7');
+  });
+
   it('JSON helpers round-trip', async () => {
     const { subjects } = setup();
     const value = { a: [1, 2], b: 'ç', c: null };
@@ -543,6 +605,7 @@ describe('SubjectKeys', () => {
   it('maps control-plane refusals to typed errors', async () => {
     const crypto = memoryCrypto({ capabilities: ['crypto:keys:read'] });
     const subjects = new SubjectKeys({
+      requireType: false,
       operations: localOperations(crypto.service, crypto.principal),
       store: new MemoryDataKeyStore(),
     });

@@ -39,6 +39,15 @@ describe('capabilities', () => {
     );
   });
 
+  it('applies a prefix only to the key-name segment', () => {
+    expect(capabilityAllows(['crypto:d*:orders'], 'crypto:decrypt:orders')).toBe(false);
+    expect(capabilityAllows(['c*:encrypt:x'], 'crypto:encrypt:x')).toBe(false);
+    expect(capabilityAllows(['crypto:keys:m*'], 'crypto:keys:manage')).toBe(false);
+    expect(capabilityAllows(['crypto:k*:manage:x'], 'crypto:keys:manage:x')).toBe(false);
+    expect(capabilityAllows(['crypto:keys:read:sub*'], 'crypto:keys:read:subject_1')).toBe(true);
+    expect(capabilityAllows(['crypto:encrypt:sub*'], 'crypto:encrypt:subject_1')).toBe(true);
+  });
+
   it('never implies an operation from another product or an empty grant', () => {
     expect(capabilityAllows([], 'crypto:encrypt:orders')).toBe(false);
     expect(capabilityAllows(['config:read'], 'crypto:encrypt:orders')).toBe(false);

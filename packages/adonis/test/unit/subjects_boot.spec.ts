@@ -80,7 +80,7 @@ describe('subjects through the provider', () => {
         app: 'research',
         store: stores.memory(),
         console: false,
-        subjects: { prefix: 'u_', store: dataKeyStores.memory() },
+        subjects: { prefix: 'u_', requireType: false, store: dataKeyStores.memory() },
       }),
     );
     const sealed = await crypto.subjects.encrypt(12, 'interview transcript');
@@ -114,7 +114,7 @@ describe('subjects through the provider', () => {
           timeoutMs: 2000,
           checkOnBoot: false,
         },
-        subjects: { store: dataKeyStores.memory() },
+        subjects: { requireType: false, store: dataKeyStores.memory() },
       }),
     );
     const alice = await crypto.subjects.encrypt('alice', 'hers');

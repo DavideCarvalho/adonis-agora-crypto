@@ -26,7 +26,6 @@ export default defineConfig({
   topology: 'tenant',
   tenant: { url: env.get('CRYPTO_URL'), partition: 'research', token: env.get('CRYPTO_TOKEN') },
   subjects: {
-    requireType: true,                           // every subject is { type, id }
     createKeys: 'explicit',                      // see "Token scope"
     cache: { maxEntries: 1000, ttlMs: 300_000 }, // the defaults
   },
@@ -36,14 +35,15 @@ export default defineConfig({
 <Callout type="warn">
 **Type your subjects.** A bare id is only an id: researcher `7` and project `7` would share the key
 `subject_7`, and forgetting one would destroy the other's data. Give every encrypted column a
-`namespace` (`subject_researcher_7`) — or pass `{ type, id }` — and set `requireType: true` so a bare
-id is refused.
+`namespace` (`subject_researcher_7`), or pass `{ type, id }`. Bare ids are refused by default
+(`requireType: true`). With `requireType: false` (one kind of subject only), a bare string id
+containing `_` is still refused, so it can never name a typed subject's key.
 </Callout>
 
 | Option | Default | |
 | --- | --- | --- |
 | `prefix` | `subject_` | key name is `${prefix}${type}_${id}` (or `${prefix}${id}`); must match `^[a-z][a-z0-9_-]{0,62}$` |
-| `requireType` | `false` | refuse bare ids: every subject is `{ type, id }` or comes from a column `namespace` |
+| `requireType` | `true` | refuse bare ids: every subject is `{ type, id }` or comes from a column `namespace` |
 | `keyName` | — | `(id, type) => string`, full control over the key name |
 | `createKeys` | `lazy` | `lazy` creates a subject's key on its first write; `explicit` requires `subjects.create(id)` first |
 | `cache` | `{ maxEntries: 1000, ttlMs: 300000 }` | `false` asks the crypto server on every operation |
@@ -65,8 +65,8 @@ CREATE INDEX crypto_data_keys_key_name ON crypto_data_keys (key_name, created_at
 
 ### Token scope
 
-A capability can name a key-name prefix (`subject_*` matches `subject_42`, never `orders`). The
-web app's token needs only:
+In the key-name segment, a capability can name a prefix (`subject_*` matches `subject_42`, never
+`orders`); other segments do not take prefixes. The web app's token needs only:
 
 ```
 crypto:datakey:subject_*  crypto:encrypt:subject_*  crypto:decrypt:subject_*
@@ -116,9 +116,13 @@ again.body // 'field notes'
   not open. The row id must be known before the insert (a UUID). For auto-increment ids, pass
   `row: (note) => note.someStableUniqueColumn`, or `row: false` to bind table and column only.
 - A value that does not decrypt throws a `SubjectKeyError`; the ciphertext is never returned as data.
-  For listings that may contain forgotten subjects, `onUndecryptable: 'null'` turns a forgotten or
-  invalid value into `null` and lists the attribute in `model.$extras.agoraUndecryptable` (an
-  unreachable crypto server still throws).
+  For listings that may contain forgotten subjects, `onUndecryptable: 'null'` turns a value whose
+  subject was forgotten into `null` and lists the attribute in `model.$extras.agoraUndecryptable`.
+  Tampered or injected values (`invalid`) still throw unless you opt in with
+  `onUndecryptable: { null: ['forgotten', 'invalid'] }`; alert on them with
+  `onUndecryptableError: (model, attribute, error) => …`. An unreachable crypto server still throws.
+  A nulled attribute cannot be saved back as `null` (that would destroy the stored value): set a
+  real value, or clear the column with a query-builder update.
 - Changing the subject (`researcherId`) or the row binding re-encrypts the row's values on save.
   The row must be loaded with all its encrypted columns: moving a row loaded with
   `select('id', 'researcher_id')` throws, because the unloaded values would stay sealed for the old
@@ -131,7 +135,8 @@ Writes that skip the model hooks do **not** encrypt:
 - `Model.query().update({ researcher_id })` moves a row without re-sealing its values.
 
 Guard every encrypted column with a CHECK constraint (see the last migration step): the database
-then refuses plaintext and values sealed for another subject than the row's, whatever wrote them.
+then refuses plaintext, values sealed for another subject than the row's, and values on a row with
+no subject, whatever wrote them. The prefix comparison is exact (case-sensitive) in every dialect.
 
 Also:
 
@@ -176,7 +181,9 @@ await db.transaction(async (trx) => { /* ... */ })
    import { addEncryptedColumnCheck } from '@adonis-agora/crypto'
 
    this.schema.raw(addEncryptedColumnCheck({
-     table: 'notes', column: 'body', subjectColumn: 'researcher_id', namespace: 'researcher',
+     table: 'research.notes', // schema-qualified (or `schema: 'research'`): no search_path
+     column: 'body', subjectColumn: 'researcher_id', namespace: 'researcher',
+     using: crypto.subjects, // its prefix; refuses a custom `keyName` it cannot express in SQL
      notValid: true,
    }))
    ```
@@ -200,8 +207,9 @@ await db.transaction(async (trx) => { /* ... */ })
 The backfill walks the table by primary key, one batch at a time, and:
 
 - encrypts plaintext values;
-- re-seals a value sealed for another subject than its row's (counted as `moved`, and reported)
-  only when row binding proves the value belongs to that row; with `row: false` it refuses;
+- reports a value sealed for another subject than its row's as `moved` and leaves it alone; with
+  `--adopt-moved` it re-seals it for the row's subject, only when row binding proves the value
+  belongs to that row (with `row: false` it refuses);
 - refuses a column that is not stored as text (`json`/`jsonb`: change its type first) and a value
   starting with `agora:` that is not a subject value;
 - skips values that are already encrypted (a rerun is safe);
@@ -211,8 +219,8 @@ The backfill walks the table by primary key, one batch at a time, and:
 
 It prints a cursor after each batch; `--from <cursor>` resumes there. `--dry-run` counts without
 writing (use it to audit a table for plaintext); `--column body` limits it to some columns. A value
-it cannot process stops the run; `--skip-errors` lists it (id, column, error code, never the value)
-and goes on.
+it cannot process stops the run; `--skip-errors` lists invalid or forgotten values (id, column,
+error code, never the value) and goes on. An outage or a refused token always stops it.
 
 From code:
 
@@ -220,7 +228,7 @@ From code:
 import { backfillEncryptedColumns } from '@adonis-agora/crypto'
 
 const result = await backfillEncryptedColumns(Note, { batchSize: 500, after: lastCursor, onError: 'skip' })
-// { rows, encrypted, reencrypted, moved, unchanged, conflicts, failed, failures, cursor }
+// { rows, encrypted, reencrypted, moved, adopted, unchanged, conflicts, failed, failures, cursor }
 ```
 
 ## Encrypting values directly
@@ -276,8 +284,9 @@ from your event bus.
   ```
 
 - **Data keys**: `crypto.subjects.rotateDataKey(id)` starts a new data key for that subject's writes.
-  Old values keep opening. Other processes keep writing with the old data key until their cache
-  entry expires, so wait `ttlMs` before re-encrypting:
+  Old values keep opening. In this process a write waits for the rotation; other processes keep
+  writing with the old data key until their cache entry expires, so wait `ttlMs` before
+  re-encrypting:
 
   ```sh
   node ace crypto:subjects:backfill '#models/note' --rotate
