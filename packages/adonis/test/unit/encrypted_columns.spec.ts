@@ -692,6 +692,17 @@ for (const dialect of dialects) {
         [ct1],
       );
       await expect(LegacyNote.findOrFail(ct1)).rejects.toThrow(/another kind of agora ciphertext/);
+      // The real tags are refused in any case; plain text that only starts with "Agora:" is text.
+      const shouting = randomUUID();
+      const prose = randomUUID();
+      await database.rawQuery(
+        `INSERT INTO ${table('notes')} (id, researcher_id, title, body) VALUES (?, 1, 'old', 'AGORA:SE1:subject_1:x:y'), (?, 1, 'old', 'Agora: um estudo sobre a escola')`,
+        [shouting, prose],
+      );
+      await expect(LegacyNote.findOrFail(shouting)).rejects.toThrow(
+        /another kind of agora ciphertext/,
+      );
+      expect((await LegacyNote.findOrFail(prose)).body).toBe('Agora: um estudo sobre a escola');
       const oldRow = randomUUID();
       const newRow = randomUUID();
       await database.rawQuery(
@@ -792,6 +803,12 @@ for (const dialect of dialects) {
       const badJson = '10000000-0000-4000-8000-000000000002';
       const ct1 = '10000000-0000-4000-8000-000000000003';
       const moved = '10000000-0000-4000-8000-000000000004';
+      const prose = '10000000-0000-4000-8000-000000000005';
+      const shouting = '10000000-0000-4000-8000-000000000006';
+      await database.rawQuery(
+        `INSERT INTO ${table('notes')} (id, researcher_id, title, body) VALUES (?, 1, 't', 'agora: texto comum'), (?, 1, 't', 'AGORA:CT1:pii:1:abc')`,
+        [prose, shouting],
+      );
       await database.rawQuery(
         `INSERT INTO ${table('notes')} (id, researcher_id, title, body, answers) VALUES (?, 1, 't', 'fine', '{"a":1}'), (?, 1, 't', 'fine', '{not json'), (?, 1, 't', 'agora:ct1:pii:1:abc', NULL)`,
         [good, badJson, ct1],
@@ -807,7 +824,7 @@ for (const dialect of dialects) {
       const result = await backfillEncryptedColumns(LegacyNote as unknown as BackfillModel, {
         onError: 'skip',
       });
-      expect(result.failed).toBe(2);
+      expect(result.failed).toBe(3);
       // Sealed for another subject: reported, left alone until someone adopts it explicitly.
       expect(result).toMatchObject({ moved: 1, adopted: 0 });
       await expect(Note.findOrFail(moved)).rejects.toThrow(/another subject/);
@@ -819,7 +836,10 @@ for (const dialect of dialects) {
       expect(result.failures.map((f) => `${f.id}:${f.attribute}:${f.code}`).sort()).toEqual([
         `${badJson}:answers:invalid`,
         `${ct1}:body:invalid`,
+        `${shouting}:body:invalid`,
       ]);
+      // Prose that only starts with "agora:" was encrypted like any plaintext.
+      expect((await Note.findOrFail(prose)).body).toBe('agora: texto comum');
       expect(JSON.stringify(result.failures)).not.toContain('not json');
       expect((await Note.findOrFail(moved)).body).toBe('mine');
       const [row] = await raw(`SELECT body FROM ${table('notes')} WHERE id = ?`, [ct1]);

@@ -7,6 +7,8 @@ export {
 } from './backfill.js';
 export { type CachedDataKey, DataKeyCache, type DataKeyCacheOptions } from './cache.js';
 export {
+  AGORA_VALUE_TAGS,
+  hasAgoraValueTag,
   isSubjectCiphertext,
   readSubjectCiphertext,
   SUBJECT_CIPHERTEXT_PREFIX,

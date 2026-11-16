@@ -1,5 +1,5 @@
 import { getRuntime } from '../services/accessor.js';
-import { isSubjectCiphertext, readSubjectCiphertext } from './ciphertext.js';
+import { hasAgoraValueTag, isSubjectCiphertext, readSubjectCiphertext } from './ciphertext.js';
 import { SubjectKeyError } from './errors.js';
 import type { SubjectId, SubjectKeys, SubjectRef } from './subject_keys.js';
 
@@ -496,7 +496,7 @@ function openRaw(
   options: EncryptedColumnOptions,
   raw: unknown,
 ): void {
-  if (typeof raw === 'string' && raw.toLowerCase().startsWith('agora:')) {
+  if (typeof raw === 'string' && hasAgoraValueTag(raw)) {
     throw new SubjectKeyError(
       'invalid',
       `crypto: ${Model.name}.${attribute} holds another kind of agora ciphertext, not a subject value`,

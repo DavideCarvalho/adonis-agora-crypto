@@ -161,8 +161,9 @@ await db.transaction(async (trx) => { /* ... */ })
 
 1. Change the column type to `text` if needed (Postgres: `ALTER TABLE notes ALTER COLUMN answers TYPE text USING answers::text`).
 2. Deploy the model with `legacyPlaintext: true`: rows that are still plaintext are read as they are,
-   every save encrypts. A value starting with `agora:` that is not a subject value is never treated
-   as plaintext. A function limits it per row, and `onLegacyRead` lets you log every read;
+   every save encrypts. A value carrying another of the library's tags (`agora:ct1:`, `agora:v1:`,
+   `agora:pk1:`, `agora:sig1:`, or `agora:se1:` in another case) is never treated as plaintext;
+   text that merely starts with "Agora:" is. A function limits it per row, and `onLegacyRead` lets you log every read;
    `agora:doctor` warns while any column has it on.
 
    ```ts
@@ -211,7 +212,7 @@ The backfill walks the table by primary key, one batch at a time, and:
   `--adopt-moved` it re-seals it for the row's subject, only when row binding proves the value
   belongs to that row (with `row: false` it refuses);
 - refuses a column that is not stored as text (`json`/`jsonb`: change its type first) and a value
-  starting with `agora:` that is not a subject value;
+  carrying another of the library's tags (see step 2);
 - skips values that are already encrypted (a rerun is safe);
 - updates each value only if it is still what it read, so a concurrent write is never overwritten
   (counted as a conflict; run it again);

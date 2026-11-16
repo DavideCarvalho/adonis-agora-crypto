@@ -22,6 +22,27 @@ import { SubjectKeyError } from './errors.js';
  */
 export const SUBJECT_CIPHERTEXT_PREFIX = 'agora:se1:';
 
+/**
+ * Every value format this library writes: subject values (`agora:se1:`), control-plane
+ * ciphertexts (`agora:ct1:`), crypto-kit sealed values (`agora:v1:`), values sealed to a public key
+ * (`agora:pk1:`) and signatures (`agora:sig1:`). A stored value that starts with one of them — in
+ * any case, so `AGORA:SE1:…` too — is never plaintext. Any other text is, even when it happens to
+ * start with `agora:` (a thesis titled "Agora: …").
+ */
+export const AGORA_VALUE_TAGS = [
+  'agora:se1:',
+  'agora:ct1:',
+  'agora:v1:',
+  'agora:pk1:',
+  'agora:sig1:',
+] as const;
+
+/** Whether a stored string carries one of the library's value tags, case-insensitively. */
+export function hasAgoraValueTag(value: string): boolean {
+  const head = value.slice(0, 11).toLowerCase();
+  return AGORA_VALUE_TAGS.some((tag) => head.startsWith(tag));
+}
+
 const IV_BYTES = 12;
 const TAG_BYTES = 16;
 const DATA_KEY_ID = /^[0-9a-f]{32}$/;
