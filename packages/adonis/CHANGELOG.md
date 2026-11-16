@@ -1,5 +1,11 @@
 # @adonis-agora/crypto
 
+## 0.11.2
+
+### Patch Changes
+
+- [#26](https://github.com/DavideCarvalho/adonis-agora-crypto/pull/26) [`e6ea148`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/e6ea14854482bee7ea5e5bfcd2cee4daf3c1052e) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `crypto:subjects:backfill` accepts models exported by name (`export class Note`), not only `export default`. A module with several models takes `--export <name>`.
+
 ## 0.11.1
 
 ### Patch Changes
