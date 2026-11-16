@@ -37,6 +37,19 @@ node ace crypto:keys:reseal --dry-run
 `--application` names the app (partition) on a control plane; on a standalone app it defaults to the
 app's own name.
 
+## Subjects
+
+| Command | What it does |
+| --- | --- |
+| `crypto:subjects:backfill <model> [--batch-size N] [--from <cursor>] [--rotate] [--dry-run] [--column <attr>]` | encrypt a model's [encrypted columns](/docs/crypto/subjects) in place, in batches; resumable |
+| `crypto:subjects:rewrap-keys [--subject <id>] [--from <id>]` | rewrap stored data keys under the latest subject-key version |
+| `crypto:subjects:forget <subject> [--force]` | delete a subject's key: its data becomes unrecoverable (asks first) |
+
+```sh
+node ace crypto:subjects:backfill '#models/note' --dry-run
+node ace crypto:subjects:backfill '#models/note' --from 01J...
+```
+
 ## Operations
 
 ```sh

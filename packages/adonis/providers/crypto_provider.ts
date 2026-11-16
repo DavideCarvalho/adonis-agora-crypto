@@ -18,6 +18,7 @@ import {
   type ControlPlaneConfig,
   type CryptoConfig,
   type CryptoKeyringConfig,
+  dataKeyStores,
   type FactoryContext,
   type StandaloneConfig,
   stores,
@@ -34,6 +35,7 @@ import type { CryptoRuntime } from '../src/runtime.js';
 import { setRuntime } from '../src/services/accessor.js';
 import { inSchema, type SqlDatabase } from '../src/sql.js';
 import type { CryptoStore } from '../src/store/store.js';
+import { SubjectKeys } from '../src/subjects/subject_keys.js';
 import { resolveTenantVerifier } from '../src/topology/verify.js';
 import { asCryptoTransport, serveBroker } from '../src/transports/broker.js';
 import { createCryptoRpc } from '../src/transports/rpc.js';
@@ -89,8 +91,12 @@ export default class CryptoProvider {
   async #doBuild(): Promise<CryptoRuntime> {
     const config = this.#config();
     const logger = await this.#logger();
-    if (config.topology === 'tenant') return this.#tenant(config, logger);
-    return this.#server(config, logger);
+    const runtime =
+      config.topology === 'tenant'
+        ? await this.#tenant(config, logger)
+        : await this.#server(config, logger);
+    await this.#subjects(config, runtime);
+    return runtime;
   }
 
   async #tenant(
@@ -149,23 +155,11 @@ export default class CryptoProvider {
     config: StandaloneConfig | ControlPlaneConfig,
     logger: { info(message: string): void; warn(message: string): void },
   ): Promise<CryptoRuntime> {
-    const container = this.app.container;
     const keyring = await this.#keyring(config.crypto);
-    const autoCreateSchema = config.autoCreateSchema ?? true;
-    const factoryContext: FactoryContext = {
-      autoCreateSchema,
-      async db(connection?: string) {
-        if (!container.hasBinding('lucid.db')) {
-          throw new Error(
-            '[@adonis-agora/crypto] the lucid store needs @adonisjs/lucid configured, or set `store: stores.memory()`',
-          );
-        }
-        const db = (await container.make('lucid.db')) as unknown as {
-          connection(name?: string): SqlDatabase;
-        };
-        return inSchema(db.connection(connection), (config as { schema?: string }).schema);
-      },
-    };
+    const factoryContext = this.#factoryContext(
+      config.autoCreateSchema ?? true,
+      (config as { schema?: string }).schema,
+    );
     const store: CryptoStore = await (config.store ?? stores.lucid())(factoryContext);
     await store.setup?.();
     this.#consoleConfig = resolveDashboardConfig(config.console);
@@ -174,7 +168,10 @@ export default class CryptoProvider {
       keyring,
       ...(config.maxBatchSize !== undefined ? { maxBatchSize: config.maxBatchSize } : {}),
     });
-    const partition = config.topology === 'standalone' ? (config.app ?? '') : '';
+    const partition =
+      (config.topology ?? 'standalone') === 'standalone'
+        ? ((config as StandaloneConfig).app ?? '')
+        : '';
     let api: CryptoApi | undefined;
     let verifyTenant: Awaited<ReturnType<typeof resolveTenantVerifier>> | undefined;
     if (config.topology === 'control-plane') {
@@ -230,6 +227,56 @@ export default class CryptoProvider {
       });
     }
     return runtime;
+  }
+
+  /** What store factories receive: the app's Lucid connection, bound to a schema when asked. */
+  #factoryContext(autoCreateSchema: boolean, defaultSchema: string | undefined): FactoryContext {
+    const container = this.app.container;
+    return {
+      autoCreateSchema,
+      async db(connection?: string, schema?: string) {
+        if (!container.hasBinding('lucid.db')) {
+          throw new Error(
+            '[@adonis-agora/crypto] the lucid store needs @adonisjs/lucid configured, or use a memory store (`stores.memory()` / `dataKeyStores.memory()`)',
+          );
+        }
+        const db = (await container.make('lucid.db')) as unknown as {
+          connection(name?: string): SqlDatabase;
+        };
+        return inSchema(db.connection(connection), schema ?? defaultSchema);
+      },
+      async dbResolver(connection?: string, schema?: string) {
+        if (!container.hasBinding('lucid.db')) {
+          throw new Error(
+            '[@adonis-agora/crypto] the lucid store needs @adonisjs/lucid configured, or use a memory store (`dataKeyStores.memory()`)',
+          );
+        }
+        const db = (await container.make('lucid.db')) as unknown as {
+          connection(name?: string): SqlDatabase;
+        };
+        return () => inSchema(db.connection(connection), schema ?? defaultSchema);
+      },
+    };
+  }
+
+  /** `config.subjects`: the subject keys over this runtime's operations, in every topology. */
+  async #subjects(config: CryptoConfig, runtime: CryptoRuntime): Promise<void> {
+    const subjects = config.subjects;
+    if (!subjects) return;
+    const context = this.#factoryContext(
+      config.topology === 'tenant' ? true : (config.autoCreateSchema ?? true),
+      config.topology === 'tenant' ? undefined : (config as { schema?: string }).schema,
+    );
+    const store = await (subjects.store ?? dataKeyStores.lucid())(context);
+    await store.setup?.();
+    runtime.subjects = new SubjectKeys({
+      operations: runtime.operations,
+      store,
+      ...(subjects.cache !== undefined ? { cache: subjects.cache } : {}),
+      ...(subjects.prefix !== undefined ? { prefix: subjects.prefix } : {}),
+      ...(subjects.keyName !== undefined ? { keyName: subjects.keyName } : {}),
+      ...(subjects.createKeys !== undefined ? { createKeys: subjects.createKeys } : {}),
+    });
   }
 
   /**
@@ -449,7 +496,9 @@ export default class CryptoProvider {
     }
     const partition =
       config.envelope?.partition ??
-      (config.topology === 'standalone' ? (config as StandaloneConfig).app : undefined);
+      ((config.topology ?? 'standalone') === 'standalone'
+        ? (config as StandaloneConfig).app
+        : undefined);
     if (!partition) {
       throw new Error(
         'crypto: `envelope.partition` is required on a control plane (the app whose keys hold the shared key)',
@@ -460,6 +509,7 @@ export default class CryptoProvider {
 
   async shutdown(): Promise<void> {
     await this.#runtime?.stopTransport?.().catch(() => {});
+    this.#runtime?.subjects?.clear();
     setRuntime(undefined);
     this.#runtime = undefined;
     this.#building = undefined;

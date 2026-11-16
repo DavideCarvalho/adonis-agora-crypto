@@ -27,6 +27,7 @@ import type { AuditListQuery } from '../src/crypto/service.js';
 import type { OperationListQuery } from '../src/operations.js';
 import type { CryptoStatus } from '../src/runtime.js';
 import { getRuntime, hasRuntime } from '../src/services/accessor.js';
+import type { SubjectId, SubjectKeys } from '../src/subjects/subject_keys.js';
 
 /**
  * `import crypto from '@adonis-agora/crypto/services/main'` — every crypto operation of this app.
@@ -137,6 +138,28 @@ const crypto = {
   /** Where this process stands: local or remote, and whether the last check worked. */
   status(): CryptoStatus | undefined {
     return hasRuntime() ? getRuntime().status() : undefined;
+  },
+
+  /**
+   * Per-subject keys with local envelopes (`subjects` in `config/crypto.ts`): `encrypt`, `decrypt`,
+   * `create`, `forget`, `rotateDataKey`, `rewrapDataKeys`, `evict`.
+   */
+  get subjects(): SubjectKeys {
+    const subjects = getRuntime().subjects;
+    if (!subjects) {
+      throw new Error(
+        '@adonis-agora/crypto: add `subjects: {}` to config/crypto.ts to use subject keys',
+      );
+    }
+    return subjects;
+  },
+
+  /**
+   * Crypto-shredding: deletes the subject's key, so every value sealed for it is unrecoverable.
+   * Same as `crypto.subjects.forget(subjectId)`.
+   */
+  forgetSubject(subjectId: SubjectId): ReturnType<SubjectKeys['forget']> {
+    return crypto.subjects.forget(subjectId);
   },
 
   /** The tenant client (undefined on a server). */

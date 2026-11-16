@@ -13,6 +13,11 @@ import {
   CryptoKeysShow,
 } from './keys.js';
 import CryptoEncrypt, { CryptoAuditCommand, CryptoDecrypt } from './ops.js';
+import {
+  CryptoSubjectsBackfill,
+  CryptoSubjectsForget,
+  CryptoSubjectsRewrapKeys,
+} from './subjects.js';
 
 /**
  * The commands of `@adonis-agora/crypto`, registered by `configure` with
@@ -32,6 +37,9 @@ const loader = new ListLoader([
   CryptoEncrypt,
   CryptoDecrypt,
   CryptoAuditCommand,
+  CryptoSubjectsBackfill,
+  CryptoSubjectsRewrapKeys,
+  CryptoSubjectsForget,
   AgoraDoctor,
   CryptoDoctor,
 ]);

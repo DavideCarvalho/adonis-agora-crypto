@@ -23,7 +23,12 @@ export function dialectOf(client: SqlClient): Dialect {
 }
 
 /** Every table this package owns. The schema rewriting below knows exactly these (and nothing else). */
-export const CRYPTO_TABLES = ['crypto_keys', 'crypto_key_versions', 'crypto_audit'] as const;
+export const CRYPTO_TABLES = [
+  'crypto_keys',
+  'crypto_key_versions',
+  'crypto_audit',
+  'crypto_data_keys',
+] as const;
 
 const SCHEMA_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,62}$/;
 const TABLE_REF = new RegExp(`(?<![\\w.'"\`])(${CRYPTO_TABLES.join('|')})(?![\\w'"\`])`, 'g');
