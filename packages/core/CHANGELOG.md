@@ -1,5 +1,15 @@
 # @adonis-agora/crypto-core
 
+## 0.5.0
+
+### Minor Changes
+
+- [#23](https://github.com/DavideCarvalho/adonis-agora-crypto/pull/23) [`f0bd3d6`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/f0bd3d61431a2a06360d5e4b0c0c2f2f7637849a) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `capabilityAllows` accepts a key-name prefix. In the key-name segment only (`crypto:<op>:<key>`,
+  `crypto:keys:<scope>:<key>`), a segment ending in `*` after a prefix (`crypto:decrypt:subject_*`)
+  matches a key name that starts with that prefix (`subject_42`), and nothing else. Prefixes in other
+  segments (`crypto:d*:x`, `crypto:keys:m*`) match nothing. A bare `*` keeps its meaning. A token can now be limited to one family of keys,
+  such as the per-subject keys of `crypto.subjects`.
+
 ## 0.4.1
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@adonis-agora/crypto-core",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Key types, capability vocabulary, wire contracts, the typed client and its building blocks (envelope fetch, KMS adapter, remote signer) shared by @adonis-agora/crypto and the libs that talk to it.",
   "license": "MIT",
   "repository": {
