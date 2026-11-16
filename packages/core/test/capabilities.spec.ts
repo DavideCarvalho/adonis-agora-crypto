@@ -25,6 +25,20 @@ describe('capabilities', () => {
     expect(capabilityAllows(['crypto:*:orders'], 'crypto:sign:invoices')).toBe(false);
   });
 
+  it('matches a key-name prefix with `prefix*`, one segment only', () => {
+    expect(capabilityAllows(['crypto:decrypt:subject_*'], 'crypto:decrypt:subject_42')).toBe(true);
+    expect(capabilityAllows(['crypto:decrypt:subject_*'], 'crypto:decrypt:orders')).toBe(false);
+    expect(capabilityAllows(['crypto:decrypt:subject_*'], 'crypto:decrypt:subject_')).toBe(false);
+    expect(capabilityAllows(['crypto:decrypt:subject_*'], 'crypto:encrypt:subject_1')).toBe(false);
+    expect(capabilityAllows(['crypto:decrypt:subject_*'], 'crypto:decrypt:subject_1:x')).toBe(
+      false,
+    );
+    expect(capabilityAllows(['crypto:keys:manage:subject_*'], 'crypto:keys:manage')).toBe(false);
+    expect(capabilityAllows(['crypto:keys:manage:subject_*'], 'crypto:keys:manage:subject_9')).toBe(
+      true,
+    );
+  });
+
   it('never implies an operation from another product or an empty grant', () => {
     expect(capabilityAllows([], 'crypto:encrypt:orders')).toBe(false);
     expect(capabilityAllows(['config:read'], 'crypto:encrypt:orders')).toBe(false);

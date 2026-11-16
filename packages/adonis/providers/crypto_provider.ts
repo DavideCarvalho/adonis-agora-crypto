@@ -275,6 +275,7 @@ export default class CryptoProvider {
       ...(subjects.cache !== undefined ? { cache: subjects.cache } : {}),
       ...(subjects.prefix !== undefined ? { prefix: subjects.prefix } : {}),
       ...(subjects.keyName !== undefined ? { keyName: subjects.keyName } : {}),
+      ...(subjects.requireType !== undefined ? { requireType: subjects.requireType } : {}),
       ...(subjects.createKeys !== undefined ? { createKeys: subjects.createKeys } : {}),
     });
   }

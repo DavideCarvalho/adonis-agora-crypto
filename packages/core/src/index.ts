@@ -71,6 +71,9 @@ export const CRYPTO_WILDCARDS = ['crypto:*', 'crypto:encrypt:*', 'crypto:decrypt
  * everything, `crypto:encrypt:*` matches every key of `encrypt`, and `crypto:*:orders` matches
  * every operation on `orders` — but nothing is implied: a token with `crypto:encrypt:orders` cannot
  * decrypt, and a metadata capability never grants an operation.
+ *
+ * A segment that ends in `*` after a prefix (`subject_*`) matches one segment starting with that
+ * prefix, and only that segment: `crypto:decrypt:subject_*` opens `subject_42`, not `orders`.
  */
 export function capabilityAllows(granted: readonly string[], required: string): boolean {
   const want = required.split(':');
@@ -81,6 +84,17 @@ export function capabilityAllows(granted: readonly string[], required: string): 
     for (let index = 0; index < have.length; index += 1) {
       const segment = have[index];
       if (segment === '*') continue;
+      if (
+        segment !== undefined &&
+        segment.length > 1 &&
+        segment.endsWith('*') &&
+        index < want.length &&
+        (want[index] ?? '').length >= segment.length &&
+        (want[index] ?? '').startsWith(segment.slice(0, -1)) &&
+        !(want[index] ?? '').includes('*')
+      ) {
+        continue;
+      }
       if (index >= want.length || segment !== want[index]) {
         matched = false;
         break;

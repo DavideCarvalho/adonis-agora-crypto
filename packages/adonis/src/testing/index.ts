@@ -84,6 +84,7 @@ export interface MemorySubjectKeysOptions extends MemoryCryptoOptions {
   cache?: DataKeyCacheOptions | false;
   prefix?: string;
   createKeys?: 'lazy' | 'explicit';
+  requireType?: boolean;
 }
 
 /**
@@ -103,6 +104,7 @@ export function memorySubjectKeys(options: MemorySubjectKeysOptions = {}): {
     ...(options.cache !== undefined ? { cache: options.cache } : {}),
     ...(options.prefix !== undefined ? { prefix: options.prefix } : {}),
     ...(options.createKeys !== undefined ? { createKeys: options.createKeys } : {}),
+    ...(options.requireType !== undefined ? { requireType: options.requireType } : {}),
   });
   return { subjects, crypto, store };
 }

@@ -268,6 +268,17 @@ export class CryptoService {
     }
   }
 
+  /**
+   * `crypto:keys:<scope>`, or its key-scoped form `crypto:keys:<scope>:<name>` when that is what the
+   * token holds (`crypto:keys:manage:subject_*` manages subject keys and nothing else).
+   */
+  #keysScope(principal: CryptoPrincipal, scope: 'read' | 'manage', name: unknown): string {
+    const scoped = `crypto:keys:${scope}:${String(name)}`;
+    return isValidKeyName(name) && capabilityAllows(principal.capabilities, scoped)
+      ? scoped
+      : `crypto:keys:${scope}`;
+  }
+
   #assertPartition(principal: CryptoPrincipal): void {
     if (typeof principal.partition !== 'string' || principal.partition === '') {
       throw new CryptoError('unauthenticated', 'crypto: the token names no partition');
@@ -412,14 +423,20 @@ export class CryptoService {
 
   async getKey(principal: CryptoPrincipal, name: string): Promise<CryptoKeyView> {
     this.#assertPartition(principal);
-    return this.#perform(principal, 'read', name, 'crypto:keys:read', async () => {
-      if (!isValidKeyName(name)) {
-        throw new CryptoError('invalid', `crypto: invalid key name "${name}"`);
-      }
-      const record = await this.store.getKey(principal.partition, name);
-      if (!record) throw new CryptoError('not_found', `crypto: no key named "${name}"`);
-      return { result: await this.#view(record) };
-    });
+    return this.#perform(
+      principal,
+      'read',
+      name,
+      this.#keysScope(principal, 'read', name),
+      async () => {
+        if (!isValidKeyName(name)) {
+          throw new CryptoError('invalid', `crypto: invalid key name "${name}"`);
+        }
+        const record = await this.store.getKey(principal.partition, name);
+        if (!record) throw new CryptoError('not_found', `crypto: no key named "${name}"`);
+        return { result: await this.#view(record) };
+      },
+    );
   }
 
   async createKey(principal: CryptoPrincipal, input: CreateKeyInput): Promise<CryptoKeyView> {
@@ -431,53 +448,59 @@ export class CryptoService {
         `crypto: invalid key name ${JSON.stringify(name)} (lowercase letters, digits, "_" and "-", starting with a letter, at most 63 characters)`,
       );
     }
-    return this.#perform(principal, 'create', name, 'crypto:keys:manage', async () => {
-      if (
-        !(
-          input.type === 'aes256-gcm' ||
-          input.type === 'x25519' ||
-          input.type === 'ed25519' ||
-          input.type === 'hmac-sha256'
-        )
-      ) {
-        throw new CryptoError('invalid', `crypto: unknown key type "${input.type}"`);
-      }
-      const existing = await this.store.getKey(principal.partition, name);
-      if (existing) {
-        throw new CryptoError(
-          'conflict',
-          existing.deletedAt
-            ? `crypto: the name "${name}" belonged to a deleted key; choose another name`
-            : `crypto: key "${name}" already exists`,
-        );
-      }
-      const now = this.#now();
-      const material = generateMaterial(input.type);
-      const sealed = await sealMaterial(this.keyring, principal.partition, name, 1, material);
-      const record: CryptoKeyRecord = {
-        partition: principal.partition,
-        name,
-        type: input.type,
-        ...(input.description !== undefined ? { description: input.description } : {}),
-        latestVersion: 1,
-        minDecryptionVersion: 1,
-        deletionAllowed: input.deletionAllowed ?? false,
-        exportable: input.exportable ?? false,
-        createdAt: now,
-        createdBy: principal.actor,
-      };
-      await this.store.createKey(record, {
-        partition: principal.partition,
-        name,
-        version: 1,
-        sealed: sealed.sealed,
-        ...(sealed.kid !== undefined ? { kid: sealed.kid } : {}),
-        ...(sealed.publicKey !== undefined ? { publicKey: sealed.publicKey } : {}),
-        createdAt: now,
-        createdBy: principal.actor,
-      });
-      return { result: await this.#view(record), version: 1 };
-    });
+    return this.#perform(
+      principal,
+      'create',
+      name,
+      this.#keysScope(principal, 'manage', name),
+      async () => {
+        if (
+          !(
+            input.type === 'aes256-gcm' ||
+            input.type === 'x25519' ||
+            input.type === 'ed25519' ||
+            input.type === 'hmac-sha256'
+          )
+        ) {
+          throw new CryptoError('invalid', `crypto: unknown key type "${input.type}"`);
+        }
+        const existing = await this.store.getKey(principal.partition, name);
+        if (existing) {
+          throw new CryptoError(
+            'conflict',
+            existing.deletedAt
+              ? `crypto: the name "${name}" belonged to a deleted key; choose another name`
+              : `crypto: key "${name}" already exists`,
+          );
+        }
+        const now = this.#now();
+        const material = generateMaterial(input.type);
+        const sealed = await sealMaterial(this.keyring, principal.partition, name, 1, material);
+        const record: CryptoKeyRecord = {
+          partition: principal.partition,
+          name,
+          type: input.type,
+          ...(input.description !== undefined ? { description: input.description } : {}),
+          latestVersion: 1,
+          minDecryptionVersion: 1,
+          deletionAllowed: input.deletionAllowed ?? false,
+          exportable: input.exportable ?? false,
+          createdAt: now,
+          createdBy: principal.actor,
+        };
+        await this.store.createKey(record, {
+          partition: principal.partition,
+          name,
+          version: 1,
+          sealed: sealed.sealed,
+          ...(sealed.kid !== undefined ? { kid: sealed.kid } : {}),
+          ...(sealed.publicKey !== undefined ? { publicKey: sealed.publicKey } : {}),
+          createdAt: now,
+          createdBy: principal.actor,
+        });
+        return { result: await this.#view(record), version: 1 };
+      },
+    );
   }
 
   async rotateKey(principal: CryptoPrincipal, name: string): Promise<CryptoKeyView> {
@@ -553,17 +576,23 @@ export class CryptoService {
     name: string,
   ): Promise<{ key: string; deleted: boolean }> {
     this.#assertPartition(principal);
-    return this.#perform(principal, 'delete', name, 'crypto:keys:manage', async () => {
-      const record = await this.#keyRecord(principal, name);
-      if (!record.deletionAllowed) {
-        throw new CryptoError(
-          'forbidden',
-          `crypto: "${name}" does not allow deletion (set deletionAllowed first)`,
-        );
-      }
-      await this.store.deleteKey(principal.partition, name, this.#now(), principal.actor);
-      return { result: { key: name, deleted: true }, version: record.latestVersion };
-    });
+    return this.#perform(
+      principal,
+      'delete',
+      name,
+      this.#keysScope(principal, 'manage', name),
+      async () => {
+        const record = await this.#keyRecord(principal, name);
+        if (!record.deletionAllowed) {
+          throw new CryptoError(
+            'forbidden',
+            `crypto: "${name}" does not allow deletion (set deletionAllowed first)`,
+          );
+        }
+        await this.store.deleteKey(principal.partition, name, this.#now(), principal.actor);
+        return { result: { key: name, deleted: true }, version: record.latestVersion };
+      },
+    );
   }
 
   async exportKey(

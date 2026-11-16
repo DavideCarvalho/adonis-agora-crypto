@@ -1,4 +1,4 @@
-import { isSubjectCiphertext } from './ciphertext.js';
+import { isSubjectCiphertext, readSubjectCiphertext } from './ciphertext.js';
 import { SubjectKeyError } from './errors.js';
 import {
   columnAad,
@@ -6,6 +6,7 @@ import {
   encryptedColumnsOf,
   type LucidModelLike,
   subjectKeysOf,
+  subjectOf,
 } from './lucid.js';
 
 /** The slice of a Lucid model the backfill needs (structural: no Lucid import). */
@@ -31,8 +32,7 @@ export interface BackfillOptions {
   after?: string | number;
   /**
    * Also re-encrypt values whose data key is not the subject's current one (after
-   * `subjects.rotateDataKey`). Default `false`: only plaintext and values sealed for another
-   * subject are written.
+   * `subjects.rotateDataKey`). Default `false`.
    */
   rotate?: boolean;
   /** Count what would change, write nothing. */
@@ -41,8 +41,22 @@ export interface BackfillOptions {
   columns?: string[];
   /** A Lucid query client or transaction (default: the model's connection). */
   client?: unknown;
+  /**
+   * A value that cannot be processed (does not open, not JSON, no subject…): `throw` (default)
+   * stops the run; `skip` leaves it as it is, counts it in `failed` and lists it in `failures`.
+   */
+  onError?: 'throw' | 'skip';
   /** Called after each batch, with the running totals and the cursor to resume from. */
   onBatch?: (progress: BackfillResult) => void | Promise<void>;
+}
+
+export interface BackfillFailure {
+  /** Primary key of the row. */
+  id: string | number;
+  attribute: string;
+  code: string;
+  /** Never contains the value. */
+  message: string;
 }
 
 export interface BackfillResult {
@@ -50,15 +64,26 @@ export interface BackfillResult {
   rows: number;
   /** Plaintext values encrypted. */
   encrypted: number;
-  /** Ciphertext re-encrypted (another subject, or a retired data key with `rotate`). */
+  /** Values re-encrypted under the subject's current data key (`rotate`). */
   reencrypted: number;
+  /**
+   * Values that were sealed for another subject than their row's and were re-sealed for the row's
+   * subject (only with row binding, which proves the value belongs to that row).
+   */
+  moved: number;
   /** Values already right (or null). */
   unchanged: number;
   /** Values that changed under the backfill (a concurrent write won; nothing was overwritten). */
   conflicts: number;
+  /** Values skipped with `onError: 'skip'`. */
+  failed: number;
+  /** The first 100 skipped values. */
+  failures: BackfillFailure[];
   /** The last primary key processed: pass it as `after` to resume. */
   cursor?: string | number;
 }
+
+type Outcome = 'encrypted' | 'reencrypted' | 'moved' | 'unchanged' | 'conflicts';
 
 function affected(result: unknown): number {
   if (typeof result === 'number') return result;
@@ -74,23 +99,18 @@ function affected(result: unknown): number {
 
 /**
  * Encrypts an existing table in place, in batches by primary key, never loading more than one batch.
- * Plaintext values are sealed; ciphertext is left alone unless it belongs to another subject than
- * its row's (or, with `rotate`, uses a retired data key). Idempotent and resumable: a rerun skips
- * what is already encrypted, and `after` restarts from a cursor. Each update is guarded by the
- * value it read, so a concurrent write is never overwritten. `updated_at` is not touched (the
- * writes go through the query builder, not `model.save()`).
+ * Plaintext values are sealed; a value sealed for another subject than its row's is re-sealed (and
+ * counted as `moved`) only when row binding proves it belongs to that row; with `rotate`, values
+ * under a retired data key are re-encrypted. Idempotent and resumable: a rerun skips what is
+ * already encrypted, and `after` restarts from a cursor. Each update is guarded by the value it
+ * read, so a concurrent write is never overwritten. `updated_at` is not touched (the writes go
+ * through the query builder, not `model.save()`).
  */
 export async function backfillEncryptedColumns(
   Model: BackfillModel,
   options: BackfillOptions = {},
 ): Promise<BackfillResult> {
   const all = encryptedColumnsOf(Model);
-  const columns = options.columns
-    ? all.filter((column) => options.columns!.includes(column.attribute))
-    : all;
-  if (columns.length === 0) {
-    throw new SubjectKeyError('invalid', `crypto: ${Model.name} has no encrypted columns to fill`);
-  }
   if (options.columns) {
     const unknown = options.columns.filter((name) => !all.some((c) => c.attribute === name));
     if (unknown.length > 0) {
@@ -99,6 +119,12 @@ export async function backfillEncryptedColumns(
         `crypto: ${Model.name} has no encrypted column ${unknown.join(', ')}`,
       );
     }
+  }
+  const columns = options.columns
+    ? all.filter((column) => options.columns!.includes(column.attribute))
+    : all;
+  if (columns.length === 0) {
+    throw new SubjectKeyError('invalid', `crypto: ${Model.name} has no encrypted columns to fill`);
   }
   const primaryKey = Model.primaryKey;
   const pkColumn = Model.$getColumn(primaryKey)?.columnName ?? primaryKey;
@@ -109,8 +135,11 @@ export async function backfillEncryptedColumns(
     rows: 0,
     encrypted: 0,
     reencrypted: 0,
+    moved: 0,
     unchanged: 0,
     conflicts: 0,
+    failed: 0,
+    failures: [],
   };
   let cursor = options.after;
 
@@ -136,13 +165,25 @@ export async function backfillEncryptedColumns(
       const model = Model.$createFromAdapterResult(plain);
       if (!model) throw new SubjectKeyError('invalid', `crypto: could not hydrate a ${Model.name}`);
       for (const column of columns) {
-        const outcome = await fillOne(Model, model, row, pk, column, options, query);
-        result[outcome] += 1;
+        try {
+          result[await fillOne(Model, model, row, pk, column, options, query)] += 1;
+        } catch (error) {
+          if (options.onError !== 'skip' || !(error instanceof SubjectKeyError)) throw error;
+          result.failed += 1;
+          if (result.failures.length < 100) {
+            result.failures.push({
+              id: pk as string | number,
+              attribute: column.attribute,
+              code: error.code,
+              message: error.message,
+            });
+          }
+        }
       }
       cursor = pk as string | number;
     }
     if (cursor !== undefined) result.cursor = cursor;
-    await options.onBatch?.({ ...result });
+    await options.onBatch?.({ ...result, failures: [...result.failures] });
     if (rows.length < batchSize) break;
   }
   return result;
@@ -156,63 +197,64 @@ async function fillOne(
   column: { attribute: string; columnName: string; options: EncryptedColumnOptions },
   options: BackfillOptions,
   query: () => BackfillQuery,
-): Promise<'encrypted' | 'reencrypted' | 'unchanged' | 'conflicts'> {
+): Promise<Outcome> {
   const raw = row[column.columnName];
   if (raw === null || raw === undefined) return 'unchanged';
-  const subjects = subjectKeysOf(column.options);
-  const subject = column.options.subject(model as never);
-  if (subject === null || subject === undefined || subject === '') {
+  const where = `${Model.name}.${column.attribute} of ${String(pk)}`;
+  if (typeof raw !== 'string') {
+    // A json/jsonb (or numeric) column: ciphertext cannot be stored there, and the guarded update
+    // needs the stored text.
     throw new SubjectKeyError(
       'invalid',
-      `crypto: ${Model.name}.${column.attribute} of ${String(pk)} has no subject`,
+      `crypto: ${where} is not stored as text; change the column type to text first`,
     );
   }
-  const rowId =
-    column.options.row === false
-      ? null
-      : column.options.row
-        ? column.options.row(model as never)
-        : pk;
-  if (rowId === undefined || rowId === '' || (column.options.row !== false && rowId === null)) {
-    throw new SubjectKeyError(
-      'invalid',
-      `crypto: ${Model.name}.${column.attribute} of ${String(pk)} has no row binding`,
-    );
+  const subjects = subjectKeysOf(column.options);
+  const subject = subjectOf(column.options, model);
+  if (subject === undefined)
+    throw new SubjectKeyError('invalid', `crypto: ${where} has no subject`);
+  const expected = subjects.keyName(subject);
+  const rowBound = column.options.row !== false;
+  const rowId = !rowBound ? null : column.options.row ? column.options.row(model as never) : pk;
+  if (rowId === undefined || rowId === null || rowId === '') {
+    if (rowBound) throw new SubjectKeyError('invalid', `crypto: ${where} has no row binding`);
   }
   const aad = columnAad(Model.table, column.columnName, rowId === null ? null : String(rowId));
 
   let plaintext: string;
-  let outcome: 'encrypted' | 'reencrypted';
+  let outcome: Outcome;
   if (isSubjectCiphertext(raw)) {
-    const expected = subjects.keyName(subject);
-    const stale = options.rotate
-      ? await subjects.needsReencrypt(raw, subject)
-      : !raw.startsWith(`agora:se1:${expected}:`);
-    if (!stale) return 'unchanged';
-    // Opening checks the row binding; a value moved here from another row fails loudly.
-    plaintext = await subjects.decrypt(raw, { aad });
-    outcome = 'reencrypted';
-  } else if (column.options.json) {
-    if (typeof raw === 'string') {
+    const parsed = readSubjectCiphertext(raw);
+    if (!parsed) throw new SubjectKeyError('invalid', `crypto: ${where} is malformed`);
+    if (parsed.key !== expected) {
+      if (!rowBound) {
+        // Without row binding nothing proves the value belongs to this row: refuse to adopt it.
+        throw new SubjectKeyError(
+          'invalid',
+          `crypto: ${where} is sealed for another subject and the column has no row binding; fix it by hand`,
+        );
+      }
+      // Opening checks the row binding: a value moved here from another row fails.
+      plaintext = await subjects.decrypt(raw, { aad, anySubject: true });
+      outcome = 'moved';
+    } else if (options.rotate && (await subjects.needsReencrypt(raw, subject))) {
+      plaintext = await subjects.decrypt(raw, { aad, subject });
+      outcome = 'reencrypted';
+    } else {
+      return 'unchanged';
+    }
+  } else if ((raw as string).startsWith('agora:')) {
+    throw new SubjectKeyError(
+      'invalid',
+      `crypto: ${where} holds another kind of agora ciphertext; it is not plaintext`,
+    );
+  } else {
+    if (column.options.json) {
       try {
         JSON.parse(raw);
       } catch {
-        throw new SubjectKeyError(
-          'invalid',
-          `crypto: ${Model.name}.${column.attribute} of ${String(pk)} is not valid JSON`,
-        );
+        throw new SubjectKeyError('invalid', `crypto: ${where} is not valid JSON`);
       }
-      plaintext = raw;
-    } else {
-      plaintext = JSON.stringify(raw);
-    }
-    outcome = 'encrypted';
-  } else {
-    if (typeof raw !== 'string') {
-      throw new SubjectKeyError(
-        'invalid',
-        `crypto: ${Model.name}.${column.attribute} of ${String(pk)} is not a string`,
-      );
     }
     plaintext = raw;
     outcome = 'encrypted';
@@ -220,8 +262,11 @@ async function fillOne(
   if (options.dryRun) return outcome;
   const ciphertext = await subjects.encrypt(subject, plaintext, { aad });
   const pkColumn = Model.$getColumn(Model.primaryKey)?.columnName ?? Model.primaryKey;
-  let update = query().where(pkColumn, pk);
-  if (typeof raw === 'string') update = update.where(column.columnName, raw);
-  const count = affected(await update.update({ [column.columnName]: ciphertext }));
+  const count = affected(
+    await query()
+      .where(pkColumn, pk)
+      .where(column.columnName, raw)
+      .update({ [column.columnName]: ciphertext }),
+  );
   return count > 0 ? outcome : 'conflicts';
 }

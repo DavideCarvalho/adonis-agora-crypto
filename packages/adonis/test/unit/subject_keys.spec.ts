@@ -159,7 +159,7 @@ describe('SubjectKeys', () => {
     const { subjects, crypto } = setup();
     const sealed = await subjects.encrypt(42, 'notes about 42', { aad: 'notes:1' });
     expect(sealed.startsWith('agora:se1:subject_42:')).toBe(true);
-    expect(await subjects.decrypt(sealed, { aad: 'notes:1' })).toBe('notes about 42');
+    expect(await subjects.decrypt(sealed, { aad: 'notes:1', subject: 42 })).toBe('notes about 42');
     const key = await crypto.service.getKey(crypto.principal, 'subject_42');
     expect(key.deletionAllowed).toBe(true);
     expect(key.type).toBe('aes256-gcm');
@@ -170,9 +170,9 @@ describe('SubjectKeys', () => {
     const first = await subjects.encrypt('r1', 'a');
     const before = remote.calls.length;
     for (let i = 0; i < 20; i += 1) {
-      await subjects.decrypt(await subjects.encrypt('r1', `v${i}`));
+      await subjects.decrypt(await subjects.encrypt('r1', `v${i}`), { anySubject: true });
     }
-    await subjects.decrypt(first);
+    await subjects.decrypt(first, { anySubject: true });
     expect(remote.calls.length).toBe(before);
   });
 
@@ -200,7 +200,7 @@ describe('SubjectKeys', () => {
     const { subjects, remote } = setup({ cache: false });
     const sealed = await subjects.encrypt(3, 'x');
     const before = remote.calls.length;
-    expect(await subjects.decrypt(sealed)).toBe('x');
+    expect(await subjects.decrypt(sealed, { anySubject: true })).toBe('x');
     expect(remote.calls.length).toBe(before + 1);
     expect(subjects.cache.size).toBe(0);
   });
@@ -212,17 +212,19 @@ describe('SubjectKeys', () => {
     subjects.evict('bob');
     remote.setDown(true);
 
-    expect(await subjects.decrypt(cached)).toBe('hers');
-    expect(await subjects.decrypt(await subjects.encrypt('alice', 'more'))).toBe('more');
+    expect(await subjects.decrypt(cached, { anySubject: true })).toBe('hers');
+    expect(
+      await subjects.decrypt(await subjects.encrypt('alice', 'more'), { anySubject: true }),
+    ).toBe('more');
 
-    const read = await rejection(subjects.decrypt(uncached));
+    const read = await rejection(subjects.decrypt(uncached, { anySubject: true }));
     expect(read.code).toBe('unavailable');
     expect(read.message).not.toContain('his');
     const write = await rejection(subjects.encrypt('carol', 'new'));
     expect(write.code).toBe('unavailable');
 
     remote.setDown(false);
-    expect(await subjects.decrypt(uncached)).toBe('his');
+    expect(await subjects.decrypt(uncached, { anySubject: true })).toBe('his');
   });
 
   it('fails when the TTL ran out and the control plane is down', async () => {
@@ -237,9 +239,11 @@ describe('SubjectKeys', () => {
     const sealed = await subjects.encrypt(1, 'x');
     remote.setDown(true);
     now = 999;
-    expect(await subjects.decrypt(sealed)).toBe('x');
+    expect(await subjects.decrypt(sealed, { anySubject: true })).toBe('x');
     now = 1000;
-    expect((await rejection(subjects.decrypt(sealed))).code).toBe('unavailable');
+    expect((await rejection(subjects.decrypt(sealed, { anySubject: true }))).code).toBe(
+      'unavailable',
+    );
   });
 
   it('forget shreds the data: the key is deleted, data keys and cache are gone', async () => {
@@ -252,7 +256,9 @@ describe('SubjectKeys', () => {
     expect(subjects.cache.get(dataKeyId)).toBeUndefined();
     expect((await crypto.service.getKey(crypto.principal, 'subject_9')).deletedAt).toBeDefined();
 
-    expect((await rejection(subjects.decrypt(sealed))).code).toBe('forgotten');
+    expect((await rejection(subjects.decrypt(sealed, { anySubject: true }))).code).toBe(
+      'forgotten',
+    );
     expect((await rejection(subjects.encrypt(9, 'again'))).code).toBe('forgotten');
     // Idempotent.
     await expect(subjects.forget(9)).resolves.toMatchObject({ forgotten: true, dataKeys: 0 });
@@ -272,7 +278,9 @@ describe('SubjectKeys', () => {
     await subjects.forget(5);
     await store.insert(stolen);
     subjects.clear();
-    expect((await rejection(subjects.decrypt(sealed))).code).toBe('forgotten');
+    expect((await rejection(subjects.decrypt(sealed, { anySubject: true }))).code).toBe(
+      'forgotten',
+    );
     await expect(
       crypto.service.decrypt(crypto.principal, { key: 'subject_5', ciphertext: stolen.wrapped }),
     ).rejects.toThrow(/deleted/);
@@ -281,7 +289,9 @@ describe('SubjectKeys', () => {
   it('refuses a ciphertext moved to another subject or aad, and a wrapped key moved to another row', async () => {
     const { subjects, store } = setup();
     const sealed = await subjects.encrypt(1, 'one', { aad: 'a' });
-    expect((await rejection(subjects.decrypt(sealed, { aad: 'b' }))).code).toBe('invalid');
+    expect((await rejection(subjects.decrypt(sealed, { aad: 'b', subject: 1 }))).code).toBe(
+      'invalid',
+    );
     expect((await rejection(subjects.decrypt(sealed, { aad: 'a', subject: 2 }))).code).toBe(
       'invalid',
     );
@@ -291,7 +301,9 @@ describe('SubjectKeys', () => {
     const forged = sealed.replace(dataKeyId, 'f'.repeat(32));
     await store.insert({ ...record, id: 'f'.repeat(32) });
     subjects.clear();
-    expect((await rejection(subjects.decrypt(forged, { aad: 'a' }))).code).toBe('invalid');
+    expect((await rejection(subjects.decrypt(forged, { aad: 'a', subject: 1 }))).code).toBe(
+      'invalid',
+    );
   });
 
   it('refuses plaintext and malformed values instead of returning them', async () => {
@@ -316,7 +328,7 @@ describe('SubjectKeys', () => {
     expect((await rejection(subjects.encrypt(1, 'x'))).code).toBe('invalid');
     expect(await subjects.create(1)).toEqual({ key: 'subject_1', created: true });
     expect(await subjects.create(1)).toEqual({ key: 'subject_1', created: false });
-    expect(await subjects.decrypt(await subjects.encrypt(1, 'x'))).toBe('x');
+    expect(await subjects.decrypt(await subjects.encrypt(1, 'x'), { anySubject: true })).toBe('x');
   });
 
   it('rotateDataKey starts a new data key; old values still open and needsReencrypt sees them', async () => {
@@ -326,7 +338,7 @@ describe('SubjectKeys', () => {
     await subjects.rotateDataKey(1);
     const fresh = await subjects.encrypt(1, 'new');
     expect(readSubjectCiphertext(fresh)!.dataKeyId).not.toBe(readSubjectCiphertext(old)!.dataKeyId);
-    expect(await subjects.decrypt(old)).toBe('old');
+    expect(await subjects.decrypt(old, { anySubject: true })).toBe('old');
     expect(await subjects.needsReencrypt(old, 1)).toBe(true);
     expect(await subjects.needsReencrypt(fresh, 1)).toBe(false);
     expect(await subjects.needsReencrypt(fresh, 2)).toBe(true);
@@ -352,7 +364,7 @@ describe('SubjectKeys', () => {
       minDecryptionVersion: 2,
     });
     subjects.clear();
-    expect(await subjects.decrypt(sealed)).toBe('kept');
+    expect(await subjects.decrypt(sealed, { anySubject: true })).toBe('kept');
     // Idempotent.
     expect(await subjects.rewrapDataKeys()).toMatchObject({ scanned: 1, rewrapped: 0 });
     expect(batches.length).toBeGreaterThan(0);
@@ -365,13 +377,167 @@ describe('SubjectKeys', () => {
     remote.setDown(true);
     const sealed = await subjects.encrypt(11, 'offline');
     expect(readSubjectCiphertext(sealed)!.dataKeyId).toBe(dataKeyId);
-    expect(await subjects.decrypt(sealed)).toBe('offline');
+    expect(await subjects.decrypt(sealed, { anySubject: true })).toBe('offline');
+  });
+
+  it('decrypt needs the expected subject unless anySubject is explicit', async () => {
+    const { subjects } = setup();
+    const sealed = await subjects.encrypt(1, 'x');
+    expect((await rejection(subjects.decrypt(sealed))).message).toMatch(/expected `subject`/);
+    expect(await subjects.decrypt(sealed, { subject: 1 })).toBe('x');
+    expect(await subjects.decrypt(sealed, { anySubject: true })).toBe('x');
+  });
+
+  it('decryptJson never puts the plaintext in its error', async () => {
+    const { subjects } = setup();
+    const sealed = await subjects.encrypt(1, 'my secret diagnosis {');
+    const error = await rejection(subjects.decryptJson(sealed, { subject: 1 }));
+    expect(error.code).toBe('invalid');
+    expect(error.message).not.toContain('diagnosis');
+    expect(String(error.cause ?? '')).not.toContain('diagnosis');
+  });
+
+  it('typed subjects get their own keys; requireType refuses bare ids', async () => {
+    const { subjects } = setup();
+    expect(subjects.keyName({ type: 'researcher', id: 7 })).toBe('subject_researcher_7');
+    expect(subjects.keyName({ type: 'project', id: 7 })).not.toBe(
+      subjects.keyName({ type: 'researcher', id: 7 }),
+    );
+    expect(() => subjects.keyName({ type: 'has_underscore', id: 1 })).toThrow(SubjectKeyError);
+    const strict = memorySubjectKeys({ requireType: true }).subjects;
+    expect(() => strict.keyName(7)).toThrow(/requireType/);
+    const sealed = await strict.encrypt({ type: 'researcher', id: 7 }, 'x');
+    expect(await strict.decrypt(sealed, { subject: { type: 'researcher', id: 7 } })).toBe('x');
+    expect(
+      (await rejection(strict.decrypt(sealed, { subject: { type: 'project', id: 7 } }))).code,
+    ).toBe('invalid');
+  });
+
+  it('a forget that races a first write never leaves the data key cached', async () => {
+    const crypto = memoryCrypto();
+    const operations = localOperations(crypto.service, crypto.principal);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let gated = false;
+    const store = new MemoryDataKeyStore();
+    const subjects = new SubjectKeys({
+      operations: {
+        ...operations,
+        generateDataKey: async (input) => {
+          const result = await operations.generateDataKey(input);
+          if (!gated) {
+            gated = true;
+            await gate;
+          }
+          return result;
+        },
+      },
+      store,
+    });
+    await subjects.create(1);
+    const write = subjects.encrypt(1, 'in flight');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await subjects.forget(1);
+    release();
+    expect((await rejection(write)).code).toBe('forgotten');
+    expect(subjects.cache.size).toBe(0);
+    expect(await store.page({ limit: 10 })).toEqual([]);
+    expect((await rejection(subjects.encrypt(1, 'after'))).code).toBe('forgotten');
+  });
+
+  it('a rotation that races a provision does not bring the retired data key back as current', async () => {
+    const crypto = memoryCrypto();
+    const operations = localOperations(crypto.service, crypto.principal);
+    const store = new MemoryDataKeyStore();
+    let gate: Promise<void> | undefined;
+    let release!: () => void;
+    const subjects = new SubjectKeys({
+      operations: {
+        ...operations,
+        decrypt: async (input) => {
+          const result = await operations.decrypt(input);
+          if (gate) await gate;
+          return result;
+        },
+      },
+      store,
+    });
+    const first = readSubjectCiphertext(await subjects.encrypt(1, 'a'))!;
+    subjects.clear();
+    gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const write = subjects.encrypt(1, 'b');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const rotated = subjects.rotateDataKey(1);
+    gate = undefined;
+    release();
+    await rotated;
+    const second = readSubjectCiphertext(await write)!;
+    expect(second.dataKeyId).not.toBe(first.dataKeyId);
+    expect(subjects.cache.current('subject_1')?.id).not.toBe(first.dataKeyId);
+    const third = readSubjectCiphertext(await subjects.encrypt(1, 'c'))!;
+    expect(third.dataKeyId).toBe(second.dataKeyId);
+  });
+
+  it('two processes sharing a store: both read each other; a forget elsewhere is final once evicted', async () => {
+    const crypto = memoryCrypto();
+    const store = new MemoryDataKeyStore();
+    const make = () =>
+      new SubjectKeys({ operations: localOperations(crypto.service, crypto.principal), store });
+    const a = make();
+    const b = make();
+    const [fromA, fromB] = await Promise.all([a.encrypt(1, 'from a'), b.encrypt(1, 'from b')]);
+    expect(await a.decrypt(fromB, { subject: 1 })).toBe('from b');
+    expect(await b.decrypt(fromA, { subject: 1 })).toBe('from a');
+    await a.forget(1);
+    // b still holds the data key until its TTL, or until it is told to evict.
+    expect(await b.decrypt(fromA, { subject: 1 })).toBe('from a');
+    b.evict(1);
+    expect((await rejection(b.decrypt(fromA, { subject: 1 }))).code).toBe('forgotten');
+    expect((await rejection(b.encrypt(1, 'new'))).code).toBe('forgotten');
+  });
+
+  it('works with a token scoped to subject keys only (key-name prefix capabilities)', async () => {
+    const crypto = memoryCrypto({
+      capabilities: [
+        'crypto:datakey:subject_*',
+        'crypto:encrypt:subject_*',
+        'crypto:decrypt:subject_*',
+        'crypto:rewrap:subject_*',
+        'crypto:keys:read:subject_*',
+        'crypto:keys:manage:subject_*',
+      ],
+    });
+    const admin = { ...crypto.principal, capabilities: ['crypto:*'] };
+    await crypto.service.createKey(admin, {
+      name: 'orders',
+      type: 'aes256-gcm',
+      deletionAllowed: true,
+    });
+    const subjects = new SubjectKeys({
+      operations: localOperations(crypto.service, crypto.principal),
+      store: new MemoryDataKeyStore(),
+    });
+    const sealed = await subjects.encrypt(1, 'x');
+    expect(await subjects.decrypt(sealed, { subject: 1 })).toBe('x');
+    await crypto.service.rotateKey(admin, 'subject_1');
+    expect(await subjects.rewrapDataKeys()).toMatchObject({ rewrapped: 1 });
+    await subjects.forget(1);
+    await expect(
+      crypto.service.encrypt(crypto.principal, { key: 'orders', plaintext: 'x' }),
+    ).rejects.toThrow(/lacks/);
+    await expect(crypto.service.deleteKey(crypto.principal, 'orders')).rejects.toThrow(/lacks/);
   });
 
   it('JSON helpers round-trip', async () => {
     const { subjects } = setup();
     const value = { a: [1, 2], b: 'ç', c: null };
-    expect(await subjects.decryptJson(await subjects.encryptJson(1, value))).toEqual(value);
+    expect(
+      await subjects.decryptJson(await subjects.encryptJson(1, value), { anySubject: true }),
+    ).toEqual(value);
   });
 
   it('maps control-plane refusals to typed errors', async () => {

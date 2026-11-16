@@ -10,8 +10,17 @@ import {
 import { fromControlPlane, SubjectKeyError } from './errors.js';
 import type { DataKeyRecord, DataKeyStore } from './store.js';
 
-/** A subject: whoever owns the data (a researcher, a user, a tenant). */
+/** A subject id: whoever owns the data (a researcher, a user, a tenant). */
 export type SubjectId = string | number;
+
+/**
+ * A subject, optionally typed: `{ type: 'researcher', id: 7 }` and `{ type: 'project', id: 7 }` get
+ * different keys (`subject_researcher_7`, `subject_project_7`), where a bare `7` would share one.
+ * Types are lowercase letters, digits and `-` (no `_`, so names cannot collide).
+ */
+export type SubjectRef = SubjectId | { type: string; id: SubjectId };
+
+const SUBJECT_TYPE = /^[a-z][a-z0-9-]{0,30}$/;
 
 /** The slice of the crypto operations subject keys use (in process, over HTTP or a broker). */
 export interface SubjectKeyOperations {
@@ -47,10 +56,15 @@ export interface SubjectKeysOptions {
   store: DataKeyStore;
   /** The unwrapped-data-key cache: options, or `false` to call the control plane every time. */
   cache?: DataKeyCacheOptions | false;
-  /** Key name of a subject: `${prefix}${id}`. Default prefix `subject_`. */
+  /** Key name of a subject: `${prefix}${id}`, or `${prefix}${type}_${id}`. Default prefix `subject_`. */
   prefix?: string;
   /** Full control over the key name (must match `^[a-z][a-z0-9_-]{0,62}$`). Overrides `prefix`. */
-  keyName?: (subject: SubjectId) => string;
+  keyName?: (id: SubjectId, type: string | undefined) => string;
+  /**
+   * Refuse bare ids: every subject must be `{ type, id }`. Recommended as soon as more than one kind
+   * of entity owns data, so researcher 7 and project 7 never share a key. Default `false`.
+   */
+  requireType?: boolean;
   /**
    * `lazy` (default) creates a subject's key on its first write; `explicit` refuses to write until
    * `subjects.create(id)` ran (a typo in a subject id then fails instead of creating a key).
@@ -66,8 +80,13 @@ export interface SealOptions {
 }
 
 export interface OpenOptions extends SealOptions {
-  /** When given, the ciphertext must belong to this subject. */
-  subject?: SubjectId;
+  /** The subject the ciphertext must belong to. Required unless `anySubject: true`. */
+  subject?: SubjectRef;
+  /**
+   * Open a ciphertext of whichever subject it names. Only safe when something else (the `aad`)
+   * already binds the value to its owner.
+   */
+  anySubject?: boolean;
 }
 
 export interface RewrapDataKeysResult {
@@ -99,8 +118,13 @@ export class SubjectKeys {
   readonly store: DataKeyStore;
   readonly #operations: SubjectKeyOperations;
   readonly #prefix: string;
-  readonly #keyName: ((subject: SubjectId) => string) | undefined;
+  readonly #keyName: ((id: SubjectId, type: string | undefined) => string) | undefined;
+  readonly #requireType: boolean;
   readonly #lazy: boolean;
+  /** Subject keys forgotten by this process: never cached again, never asked for again. */
+  readonly #forgotten = new Set<string>();
+  /** Bumped by `rotateDataKey` and `forget`: an in-flight provision older than this is stale. */
+  readonly #epochs = new Map<string, number>();
   readonly #now: () => string;
   /** In-flight work, so concurrent callers share one round trip. */
   readonly #unwrapping = new Map<string, Promise<void>>();
@@ -114,6 +138,7 @@ export class SubjectKeys {
     );
     this.#prefix = options.prefix ?? 'subject_';
     this.#keyName = options.keyName;
+    this.#requireType = options.requireType === true;
     this.#lazy = (options.createKeys ?? 'lazy') === 'lazy';
     this.#now = options.now ?? (() => new Date().toISOString());
   }
@@ -123,14 +148,33 @@ export class SubjectKeys {
   /* ------------------------------------------------------------------------------------------ */
 
   /** The control-plane key name of a subject. Throws `invalid` for an id that cannot be one. */
-  keyName(subject: SubjectId): string {
-    if (subject === null || subject === undefined || subject === '') {
+  keyName(subject: SubjectRef): string {
+    let type: string | undefined;
+    let id: unknown = subject;
+    if (subject !== null && typeof subject === 'object') {
+      type = (subject as { type?: unknown }).type as string | undefined;
+      id = (subject as { id?: unknown }).id;
+      if (typeof type !== 'string' || !SUBJECT_TYPE.test(type)) {
+        throw new SubjectKeyError(
+          'invalid',
+          `crypto: subject type ${JSON.stringify(type)} must be lowercase letters, digits and "-"`,
+        );
+      }
+    } else if (this.#requireType) {
+      throw new SubjectKeyError(
+        'invalid',
+        'crypto: subjects must be typed ({ type, id }) because `requireType` is on',
+      );
+    }
+    if (id === null || id === undefined || id === '') {
       throw new SubjectKeyError('invalid', 'crypto: a subject id is required');
     }
-    if (typeof subject !== 'string' && typeof subject !== 'number') {
+    if (typeof id !== 'string' && typeof id !== 'number') {
       throw new SubjectKeyError('invalid', 'crypto: a subject id is a string or a number');
     }
-    const name = this.#keyName ? this.#keyName(subject) : `${this.#prefix}${String(subject)}`;
+    const name = this.#keyName
+      ? this.#keyName(id, type)
+      : `${this.#prefix}${type !== undefined ? `${type}_` : ''}${String(id)}`;
     if (!isValidKeyName(name)) {
       throw new SubjectKeyError(
         'invalid',
@@ -141,7 +185,7 @@ export class SubjectKeys {
   }
 
   /** Creates the subject's key now. Idempotent: `created: false` when it already existed. */
-  async create(subject: SubjectId): Promise<{ key: string; created: boolean }> {
+  async create(subject: SubjectRef): Promise<{ key: string; created: boolean }> {
     const key = this.keyName(subject);
     return { key, created: await this.#createKey(key) };
   }
@@ -154,7 +198,7 @@ export class SubjectKeys {
    * Other processes that still cache one of its data keys keep it until the cache TTL runs out;
    * call `evict(subject)` there (from your own event bus) to cut that window.
    */
-  async forget(subject: SubjectId): Promise<{ key: string; forgotten: true; dataKeys: number }> {
+  async forget(subject: SubjectRef): Promise<{ key: string; forgotten: true; dataKeys: number }> {
     const key = this.keyName(subject);
     try {
       await this.#operations.deleteKey(key);
@@ -169,8 +213,13 @@ export class SubjectKeys {
         throw fromControlPlane(error, `forget ${key}`);
       }
     }
+    // Tombstone first: a provision already in flight cannot cache this subject's data key again.
+    this.#forgotten.add(key);
+    this.#bump(key);
+    this.#provisioning.delete(key);
     this.cache.evictKey(key);
     const dataKeys = await this.store.deleteKey(key);
+    this.cache.evictKey(key);
     return { key, forgotten: true, dataKeys };
   }
 
@@ -178,7 +227,7 @@ export class SubjectKeys {
    * Loads the subject's current data key into the cache (creating the key and the data key when
    * needed), so the next writes and reads need neither the crypto server nor the data-key table.
    */
-  async warm(subject: SubjectId): Promise<{ key: string; dataKeyId: string }> {
+  async warm(subject: SubjectRef): Promise<{ key: string; dataKeyId: string }> {
     const key = this.keyName(subject);
     const { id, bytes } = await this.#currentDataKey(key);
     bytes.fill(0);
@@ -186,7 +235,7 @@ export class SubjectKeys {
   }
 
   /** Drops (and zeroes) this process' cached data keys of a subject. */
-  evict(subject: SubjectId): void {
+  evict(subject: SubjectRef): void {
     this.cache.evictKey(this.keyName(subject));
   }
 
@@ -200,8 +249,11 @@ export class SubjectKeys {
    * `crypto:subjects:backfill --rotate` re-encrypts them. Other processes switch once their cached
    * current data key expires.
    */
-  async rotateDataKey(subject: SubjectId): Promise<{ key: string; retired: number }> {
+  async rotateDataKey(subject: SubjectRef): Promise<{ key: string; retired: number }> {
     const key = this.keyName(subject);
+    this.#bump(key);
+    this.#provisioning.delete(key);
+    this.cache.forgetCurrent(key);
     const retired = await this.store.retire(key, this.#now());
     this.cache.forgetCurrent(key);
     return { key, retired };
@@ -212,7 +264,11 @@ export class SubjectKeys {
   /* ------------------------------------------------------------------------------------------ */
 
   /** Seals a string for a subject: `agora:se1:<key>:<data key id>:…`. */
-  async encrypt(subject: SubjectId, plaintext: string, options: SealOptions = {}): Promise<string> {
+  async encrypt(
+    subject: SubjectRef,
+    plaintext: string,
+    options: SealOptions = {},
+  ): Promise<string> {
     if (typeof plaintext !== 'string') {
       throw new SubjectKeyError('invalid', 'crypto: plaintext must be a string');
     }
@@ -229,8 +285,15 @@ export class SubjectKeys {
   async decrypt(ciphertext: string, options: OpenOptions = {}): Promise<string> {
     const parsed = readSubjectCiphertext(ciphertext);
     if (!parsed) throw new SubjectKeyError('invalid', 'crypto: not an agora:se1 ciphertext');
-    if (options.subject !== undefined && this.keyName(options.subject) !== parsed.key) {
-      throw new SubjectKeyError('invalid', 'crypto: the ciphertext belongs to another subject');
+    if (options.subject !== undefined) {
+      if (this.keyName(options.subject) !== parsed.key) {
+        throw new SubjectKeyError('invalid', 'crypto: the ciphertext belongs to another subject');
+      }
+    } else if (options.anySubject !== true) {
+      throw new SubjectKeyError(
+        'invalid',
+        'crypto: decrypt needs the expected `subject` (or `anySubject: true` when the aad already binds the owner)',
+      );
     }
     const bytes = await this.#dataKey(parsed.dataKeyId, parsed.key);
     try {
@@ -241,7 +304,7 @@ export class SubjectKeys {
   }
 
   /** `encrypt(subject, JSON.stringify(value))`. */
-  encryptJson(subject: SubjectId, value: unknown, options: SealOptions = {}): Promise<string> {
+  encryptJson(subject: SubjectRef, value: unknown, options: SealOptions = {}): Promise<string> {
     const text = JSON.stringify(value);
     if (text === undefined) {
       throw new SubjectKeyError('invalid', 'crypto: the value is not JSON-serializable');
@@ -251,7 +314,13 @@ export class SubjectKeys {
 
   /** `JSON.parse(decrypt(ciphertext))`. */
   async decryptJson<T = unknown>(ciphertext: string, options: OpenOptions = {}): Promise<T> {
-    return JSON.parse(await this.decrypt(ciphertext, options)) as T;
+    const text = await this.decrypt(ciphertext, options);
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      // Never echo the plaintext (JSON.parse puts a slice of it in its message).
+      throw new SubjectKeyError('invalid', 'crypto: the decrypted value is not valid JSON');
+    }
   }
 
   /**
@@ -259,7 +328,7 @@ export class SubjectKeys {
    * belongs to another subject than `subject`, or its data key is no longer the subject's current
    * one (after `rotateDataKey`). Reads the local store only.
    */
-  async needsReencrypt(value: unknown, subject: SubjectId): Promise<boolean> {
+  async needsReencrypt(value: unknown, subject: SubjectRef): Promise<boolean> {
     const parsed = readSubjectCiphertext(value);
     if (!parsed) return true;
     const key = this.keyName(subject);
@@ -277,7 +346,7 @@ export class SubjectKeys {
    */
   async rewrapDataKeys(
     options: {
-      subject?: SubjectId;
+      subject?: SubjectRef;
       after?: string;
       batchSize?: number;
       onBatch?: (progress: RewrapDataKeysResult & { cursor: string }) => void | Promise<void>;
@@ -346,12 +415,27 @@ export class SubjectKeys {
   /* Data keys                                                                                   */
   /* ------------------------------------------------------------------------------------------ */
 
+  #epoch(key: string): number {
+    return this.#epochs.get(key) ?? 0;
+  }
+
+  #bump(key: string): void {
+    this.#epochs.set(key, this.#epoch(key) + 1);
+  }
+
+  #assertNotForgotten(key: string): void {
+    if (this.#forgotten.has(key)) {
+      throw new SubjectKeyError('forgotten', `crypto: ${key}: the subject was forgotten`);
+    }
+  }
+
   /** A private copy of a data key's bytes; the caller zeroes it. */
   #copy(entry: CachedDataKey): Buffer {
     return Buffer.from(entry.bytes);
   }
 
   async #dataKey(id: string, key: string): Promise<Buffer> {
+    this.#assertNotForgotten(key);
     const cached = this.cache.get(id);
     if (cached) {
       if (cached.key !== key) {
@@ -390,7 +474,10 @@ export class SubjectKeys {
   }
 
   /** Unwraps a stored data key on the control plane and caches it; returns a private copy. */
-  async #unwrap(record: DataKeyRecord, options: { current?: boolean } = {}): Promise<Buffer> {
+  async #unwrap(
+    record: DataKeyRecord,
+    options: { current?: boolean; epoch?: number } = {},
+  ): Promise<Buffer> {
     let plaintext: string;
     try {
       ({ plaintext } = await this.#operations.decrypt({
@@ -405,30 +492,51 @@ export class SubjectKeys {
     return this.#accept(record.id, record.key, plaintext, options);
   }
 
-  #accept(id: string, key: string, plaintext: string, options: { current?: boolean }): Buffer {
+  #accept(
+    id: string,
+    key: string,
+    plaintext: string,
+    options: { current?: boolean; epoch?: number },
+  ): Buffer {
     const decoded = Buffer.from(plaintext, 'base64url');
     try {
+      // Checked after the await that produced the key: a forget that ran meanwhile wins.
+      this.#assertNotForgotten(key);
       if (decoded.length !== 32 || decoded.toString('base64url') !== plaintext) {
         throw new SubjectKeyError('invalid', `crypto: data key ${id} is not a 32-byte key`);
       }
-      return this.cache.set(id, key, decoded, options);
+      const current =
+        options.current === true &&
+        (options.epoch === undefined || options.epoch === this.#epoch(key));
+      return this.cache.set(id, key, decoded, { current });
     } finally {
       decoded.fill(0);
     }
   }
 
   async #currentDataKey(key: string): Promise<{ id: string; bytes: Buffer }> {
-    const cached = this.cache.current(key);
-    if (cached) return { id: cached.id, bytes: this.#copy(cached) };
-    if (!this.cache.enabled) return this.#provisionUncached(key);
-    let pending = this.#provisioning.get(key);
-    if (!pending) {
-      pending = this.#provision(key);
-      this.#provisioning.set(key, pending);
-      pending.finally(() => this.#provisioning.delete(key)).catch(() => {});
+    for (let attempt = 0; ; attempt += 1) {
+      this.#assertNotForgotten(key);
+      const cached = this.cache.current(key);
+      if (cached) return { id: cached.id, bytes: this.#copy(cached) };
+      if (!this.cache.enabled) return this.#provisionUncached(key);
+      const epoch = this.#epoch(key);
+      let pending = this.#provisioning.get(key);
+      if (!pending) {
+        const started = this.#provision(key, epoch);
+        pending = started;
+        this.#provisioning.set(key, started);
+        started
+          .finally(() => {
+            if (this.#provisioning.get(key) === started) this.#provisioning.delete(key);
+          })
+          .catch(() => {});
+      }
+      const id = await pending;
+      // A rotation (or a forget) ran while this was in flight: what it found may be retired.
+      if (epoch !== this.#epoch(key) && attempt < 3) continue;
+      return { id, bytes: await this.#dataKey(id, key) };
     }
-    const id = await pending;
-    return { id, bytes: await this.#dataKey(id, key) };
   }
 
   /** With the cache off: the current data key (or a new one), one control-plane call. */
@@ -441,14 +549,15 @@ export class SubjectKeys {
       throw new SubjectKeyError('failed', 'crypto: the control plane returned no data key');
     }
     await this.store.insert({ id, key, wrapped: generated.wrapped, createdAt: this.#now() });
+    if (this.#forgotten.has(key)) await this.store.deleteKey(key);
     return { id, bytes: this.#accept(id, key, generated.plaintext, {}) };
   }
 
   /** Loads (or creates) the subject's current data key into the cache; returns its id. */
-  async #provision(key: string): Promise<string> {
+  async #provision(key: string, epoch: number): Promise<string> {
     const existing = await this.store.current(key);
     if (existing) {
-      (await this.#unwrap(existing, { current: true })).fill(0);
+      (await this.#unwrap(existing, { current: true, epoch })).fill(0);
       return existing.id;
     }
     const id = newDataKeyId();
@@ -457,7 +566,11 @@ export class SubjectKeys {
       throw new SubjectKeyError('failed', 'crypto: the control plane returned no data key');
     }
     await this.store.insert({ id, key, wrapped: generated.wrapped, createdAt: this.#now() });
-    this.#accept(id, key, generated.plaintext, { current: true }).fill(0);
+    if (this.#forgotten.has(key)) {
+      // Forgotten while the data key was being made: drop the row this call just wrote.
+      await this.store.deleteKey(key);
+    }
+    this.#accept(id, key, generated.plaintext, { current: true, epoch }).fill(0);
     return id;
   }
 
@@ -496,15 +609,22 @@ export class SubjectKeys {
       });
       return true;
     } catch (error) {
-      if ((error as { code?: unknown }).code !== 'conflict') {
+      const code = (error as { code?: unknown }).code;
+      if (
+        code === 'forbidden' ||
+        code === 'unauthenticated' ||
+        code === 'network' ||
+        code === 'timeout'
+      ) {
         throw fromControlPlane(error, `create ${key}`);
       }
-      // A conflict is either "exists" (fine) or "the name belonged to a deleted key" (forgotten).
+      // A conflict — or a race with another process creating it (some stores report that as a
+      // plain error) — is either "exists" (fine) or "the name belonged to a deleted key".
       let view: { deletedAt?: string };
       try {
         view = await this.#operations.getKey(key);
-      } catch (lookup) {
-        throw fromControlPlane(lookup, `create ${key}`);
+      } catch {
+        throw fromControlPlane(error, `create ${key}`);
       }
       if (view.deletedAt !== undefined) {
         throw new SubjectKeyError('forgotten', `crypto: ${key}: the subject was forgotten`);

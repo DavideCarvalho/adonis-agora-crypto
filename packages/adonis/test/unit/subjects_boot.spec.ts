@@ -85,9 +85,13 @@ describe('subjects through the provider', () => {
     );
     const sealed = await crypto.subjects.encrypt(12, 'interview transcript');
     expect(sealed.startsWith('agora:se1:u_12:')).toBe(true);
-    expect(await crypto.subjects.decrypt(sealed)).toBe('interview transcript');
+    expect(await crypto.subjects.decrypt(sealed, { anySubject: true })).toBe(
+      'interview transcript',
+    );
     await crypto.forgetSubject(12);
-    await expect(crypto.subjects.decrypt(sealed)).rejects.toMatchObject({ code: 'forgotten' });
+    await expect(crypto.subjects.decrypt(sealed, { anySubject: true })).rejects.toMatchObject({
+      code: 'forgotten',
+    });
   });
 
   it('without `subjects` the accessor says how to turn it on', async () => {
@@ -124,8 +128,10 @@ describe('subjects through the provider', () => {
     servers.splice(servers.indexOf(remote.http), 1);
     remote.http.closeAllConnections?.();
 
-    expect(await crypto.subjects.decrypt(alice)).toBe('hers');
-    const failure = await crypto.subjects.decrypt(bob).catch((error: unknown) => error);
+    expect(await crypto.subjects.decrypt(alice, { anySubject: true })).toBe('hers');
+    const failure = await crypto.subjects
+      .decrypt(bob, { anySubject: true })
+      .catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(SubjectKeyError);
     expect((failure as SubjectKeyError).code).toBe('unavailable');
   });

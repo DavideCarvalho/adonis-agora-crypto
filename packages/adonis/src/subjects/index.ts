@@ -1,4 +1,5 @@
 export {
+  type BackfillFailure,
   type BackfillModel,
   type BackfillOptions,
   type BackfillResult,
@@ -17,8 +18,18 @@ export {
   type EncryptedColumnOptions,
   encrypted,
   encryptedColumnsOf,
+  legacyPlaintextColumns,
+  legacyPlaintextReads,
   SealedValue,
+  subjectOf,
+  UNDECRYPTABLE_EXTRA,
 } from './lucid.js';
+export {
+  addEncryptedColumnCheck,
+  type CheckDialect,
+  type EncryptedColumnCheckOptions,
+  encryptedColumnCheck,
+} from './migration.js';
 export {
   type DataKeyRecord,
   type DataKeyStore,
@@ -33,4 +44,5 @@ export {
   type SubjectKeyOperations,
   SubjectKeys,
   type SubjectKeysOptions,
+  type SubjectRef,
 } from './subject_keys.js';

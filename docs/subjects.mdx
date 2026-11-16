@@ -4,11 +4,13 @@ description: One key per person, values encrypted in your app with cached data k
 icon: UserLock
 ---
 
+import { Callout } from 'fumadocs-ui/components/callout';
+
 Give each subject (a researcher, a user, a customer) its own key on the crypto server, and encrypt
 their data **in your app**. Reads and writes need no network call once the subject's data key is
 cached, and deleting the subject's key makes all of their data unrecoverable.
 
-- **Subject key**: an `aes256-gcm` key on the crypto server, named `subject_<id>`, deletable.
+- **Subject key**: an `aes256-gcm` key on the crypto server, named `subject_<type>_<id>`, deletable.
 - **Data key**: a random AES-256 key that encrypts the values. Your database stores it only wrapped
   by the subject key (table `crypto_data_keys`).
 - **Cache**: unwrapped data keys stay in memory for a while, so steady-state traffic stays local.
@@ -24,16 +26,25 @@ export default defineConfig({
   topology: 'tenant',
   tenant: { url: env.get('CRYPTO_URL'), partition: 'research', token: env.get('CRYPTO_TOKEN') },
   subjects: {
-    prefix: 'researcher_',                       // key name: researcher_<id>. Default `subject_`
+    requireType: true,                           // every subject is { type, id }
+    createKeys: 'explicit',                      // see "Token scope"
     cache: { maxEntries: 1000, ttlMs: 300_000 }, // the defaults
   },
 })
 ```
 
+<Callout type="warn">
+**Type your subjects.** A bare id is only an id: researcher `7` and project `7` would share the key
+`subject_7`, and forgetting one would destroy the other's data. Give every encrypted column a
+`namespace` (`subject_researcher_7`) — or pass `{ type, id }` — and set `requireType: true` so a bare
+id is refused.
+</Callout>
+
 | Option | Default | |
 | --- | --- | --- |
-| `prefix` | `subject_` | key name is `${prefix}${id}`; must end up matching `^[a-z][a-z0-9_-]{0,62}$` |
-| `keyName` | — | `(id) => string`, full control over the key name |
+| `prefix` | `subject_` | key name is `${prefix}${type}_${id}` (or `${prefix}${id}`); must match `^[a-z][a-z0-9_-]{0,62}$` |
+| `requireType` | `false` | refuse bare ids: every subject is `{ type, id }` or comes from a column `namespace` |
+| `keyName` | — | `(id, type) => string`, full control over the key name |
 | `createKeys` | `lazy` | `lazy` creates a subject's key on its first write; `explicit` requires `subjects.create(id)` first |
 | `cache` | `{ maxEntries: 1000, ttlMs: 300000 }` | `false` asks the crypto server on every operation |
 | `store` | `dataKeyStores.lucid()` | where wrapped data keys live; `dataKeyStores.lucid({ connection, schema })` or `dataKeyStores.memory()` |
@@ -52,9 +63,22 @@ CREATE TABLE crypto_data_keys (
 CREATE INDEX crypto_data_keys_key_name ON crypto_data_keys (key_name, created_at);
 ```
 
-On a tenant, the token needs `crypto:datakey:*`, `crypto:encrypt:*`, `crypto:decrypt:*` and
-`crypto:rewrap:*` for the subject keys, plus `crypto:keys:manage` (create and forget) and
-`crypto:keys:read` (rewrap command).
+### Token scope
+
+A capability can name a key-name prefix (`subject_*` matches `subject_42`, never `orders`). The
+web app's token needs only:
+
+```
+crypto:datakey:subject_*  crypto:encrypt:subject_*  crypto:decrypt:subject_*
+```
+
+With `createKeys: 'lazy'` it also needs `crypto:keys:manage:subject_*` and
+`crypto:keys:read:subject_*` (create on first write). Least privilege is `createKeys: 'explicit'`:
+create subject keys (`crypto.subjects.create({ type, id })`) and forget them
+(`crypto:subjects:forget`) from a separate operations token that holds
+`crypto:keys:manage:subject_*`, `crypto:keys:read:subject_*` and `crypto:rewrap:subject_*`, so the
+token serving web requests can never delete a key. The crypto server must run this version for
+prefix capabilities to be honoured.
 
 ## Encrypted columns
 
@@ -71,10 +95,10 @@ export default class Note extends BaseModel {
   @column()
   declare researcherId: number
 
-  @encrypted({ subject: (note: Note) => note.researcherId })
+  @encrypted({ subject: (note: Note) => note.researcherId, namespace: 'researcher' })
   declare body: string
 
-  @encrypted({ subject: (note: Note) => note.researcherId, json: true })
+  @encrypted({ subject: (note: Note) => note.researcherId, namespace: 'researcher', json: true })
   declare answers: Record<string, unknown>
 }
 ```
@@ -92,28 +116,69 @@ again.body // 'field notes'
   not open. The row id must be known before the insert (a UUID). For auto-increment ids, pass
   `row: (note) => note.someStableUniqueColumn`, or `row: false` to bind table and column only.
 - A value that does not decrypt throws a `SubjectKeyError`; the ciphertext is never returned as data.
-- Changing `researcherId` re-encrypts the row's values for the new subject on save.
+  For listings that may contain forgotten subjects, `onUndecryptable: 'null'` turns a forgotten or
+  invalid value into `null` and lists the attribute in `model.$extras.agoraUndecryptable` (an
+  unreachable crypto server still throws).
+- Changing the subject (`researcherId`) or the row binding re-encrypts the row's values on save.
+  The row must be loaded with all its encrypted columns: moving a row loaded with
+  `select('id', 'researcher_id')` throws, because the unloaded values would stay sealed for the old
+  owner (and forgetting the old owner would destroy the new owner's data).
 
-Not encrypted:
+Writes that skip the model hooks do **not** encrypt:
 
-- `Model.query().update({...})`, `saveQuietly()` and raw SQL skip the model hooks.
-  `saveQuietly()` throws instead of writing plaintext.
+- `Model.query().update({...})`, `db.from(...).insert/update` and raw SQL write what you give them,
+  plaintext included. `saveQuietly()` throws instead of writing.
+- `Model.query().update({ researcher_id })` moves a row without re-sealing its values.
+
+Guard every encrypted column with a CHECK constraint (see the last migration step): the database
+then refuses plaintext and values sealed for another subject than the row's, whatever wrote them.
+
+Also:
+
 - `where('body', ...)`: ciphertext is randomized, so encrypted columns cannot be searched or indexed.
 - `.pojo()` and raw queries return the stored ciphertext.
+- With `row: false`, select the subject column whenever you read the encrypted one.
 
-On SQLite (one connection), a cache miss inside `db.transaction()` waits for that transaction to
-end. Call `await crypto.subjects.warm(researcherId)` before opening the transaction. Postgres and
-MySQL do not need this.
+### Transactions
+
+A cold subject (data key not cached) needs the `crypto_data_keys` table on another connection.
+On SQLite (one connection) that waits for the open transaction until the pool times out; on
+Postgres and MySQL it takes a second pooled connection. That includes Lucid's implicit
+transactions: `updateOrCreate`, `updateOrCreateMany`, `fetchOrCreateMany` and `lockForUpdate`.
+Warm the subject first:
+
+```ts
+await crypto.subjects.warm({ type: 'researcher', id: researcherId })
+await db.transaction(async (trx) => { /* ... */ })
+```
 
 ## Migrating an existing column
 
 1. Change the column type to `text` if needed (Postgres: `ALTER TABLE notes ALTER COLUMN answers TYPE text USING answers::text`).
 2. Deploy the model with `legacyPlaintext: true`: rows that are still plaintext are read as they are,
-   every save encrypts.
+   every save encrypts. A value starting with `agora:` that is not a subject value is never treated
+   as plaintext. A function limits it per row, and `onLegacyRead` lets you log every read;
+   `agora:doctor` warns while any column has it on.
 
    ```ts
-   @encrypted({ subject: (note: Note) => note.researcherId, legacyPlaintext: true })
+   @encrypted({
+     subject: (note: Note) => note.researcherId,
+     namespace: 'researcher',
+     legacyPlaintext: (note: Note) => note.createdAt < MIGRATION_STARTED_AT,
+     onLegacyRead: (note, attribute) => logger.warn({ id: note.id, attribute }, 'plaintext read'),
+   })
    declare body: string
+   ```
+
+   On Postgres you can already refuse new plaintext writes (existing rows are not checked yet):
+
+   ```ts
+   import { addEncryptedColumnCheck } from '@adonis-agora/crypto'
+
+   this.schema.raw(addEncryptedColumnCheck({
+     table: 'notes', column: 'body', subjectColumn: 'researcher_id', namespace: 'researcher',
+     notValid: true,
+   }))
    ```
 
 3. Encrypt the rest:
@@ -122,26 +187,40 @@ MySQL do not need this.
    node ace crypto:subjects:backfill '#models/note' --batch-size 500
    ```
 
-4. Remove `legacyPlaintext`. From then on a plaintext value in the column throws.
+4. Remove `legacyPlaintext`, and enforce the constraint on every row:
+
+   ```sql
+   ALTER TABLE notes VALIDATE CONSTRAINT notes_body_encrypted;  -- Postgres, after notValid
+   ```
+
+   On MySQL use `addEncryptedColumnCheck({ ..., dialect: 'mysql' })` now. On SQLite put
+   `encryptedColumnCheck({ column, subjectColumn, dialect: 'sqlite' })` in the `CREATE TABLE`.
+   From then on the database refuses any value that is not sealed for the row's subject.
 
 The backfill walks the table by primary key, one batch at a time, and:
 
-- encrypts plaintext values, and re-encrypts values sealed for a different subject than their row's;
+- encrypts plaintext values;
+- re-seals a value sealed for another subject than its row's (counted as `moved`, and reported)
+  only when row binding proves the value belongs to that row; with `row: false` it refuses;
+- refuses a column that is not stored as text (`json`/`jsonb`: change its type first) and a value
+  starting with `agora:` that is not a subject value;
 - skips values that are already encrypted (a rerun is safe);
 - updates each value only if it is still what it read, so a concurrent write is never overwritten
   (counted as a conflict; run it again);
 - does not touch `updated_at`.
 
 It prints a cursor after each batch; `--from <cursor>` resumes there. `--dry-run` counts without
-writing; `--column body` limits it to some columns.
+writing (use it to audit a table for plaintext); `--column body` limits it to some columns. A value
+it cannot process stops the run; `--skip-errors` lists it (id, column, error code, never the value)
+and goes on.
 
 From code:
 
 ```ts
 import { backfillEncryptedColumns } from '@adonis-agora/crypto'
 
-const result = await backfillEncryptedColumns(Note, { batchSize: 500, after: lastCursor })
-// { rows, encrypted, reencrypted, unchanged, conflicts, cursor }
+const result = await backfillEncryptedColumns(Note, { batchSize: 500, after: lastCursor, onError: 'skip' })
+// { rows, encrypted, reencrypted, moved, unchanged, conflicts, failed, failures, cursor }
 ```
 
 ## Encrypting values directly
@@ -149,33 +228,43 @@ const result = await backfillEncryptedColumns(Note, { batchSize: 500, after: las
 ```ts
 import crypto from '@adonis-agora/crypto/services/main'
 
-const sealed = await crypto.subjects.encrypt(researcher.id, text, { aad: `report:${report.id}` })
-const text = await crypto.subjects.decrypt(sealed, { aad: `report:${report.id}` })
+const owner = { type: 'researcher', id: researcher.id }
+const sealed = await crypto.subjects.encrypt(owner, text, { aad: `report:${report.id}` })
+const text = await crypto.subjects.decrypt(sealed, { subject: owner, aad: `report:${report.id}` })
 
-const payload = await crypto.subjects.encryptJson(researcher.id, { answers })
-const { answers } = await crypto.subjects.decryptJson(payload)
+const payload = await crypto.subjects.encryptJson(owner, { answers })
+const { answers } = await crypto.subjects.decryptJson(payload, { subject: owner })
 ```
 
-`aad` binds the ciphertext to a context: the same string must reach `decrypt`.
+`aad` binds the ciphertext to a context: the same string must reach `decrypt`. `decrypt` checks the
+value belongs to `subject`; `anySubject: true` skips that check, for when the `aad` already binds the
+owner.
 
 ## Forgetting a subject
 
 ```ts
-await crypto.forgetSubject(researcher.id)
+await crypto.forgetSubject({ type: 'researcher', id: researcher.id })
 ```
 
 ```sh
-node ace crypto:subjects:forget 7 --force
+node ace crypto:subjects:forget 7 --type researcher --force
 ```
 
 The subject's key is deleted on the crypto server, and its wrapped data keys and cached data keys
-are dropped here. Everything encrypted for that subject is unrecoverable from then on, in every
-backup. Reads fail with `forgotten`, and so does any new write for that subject. A subject that
+are dropped here. From then on the subject's data cannot be opened from your database or its
+backups. Reads fail with `forgotten`, and so does any new write for that subject. A subject that
 never stored anything is forgotten too.
 
+The guarantee is bounded by the crypto server's own storage: a backup of the crypto server taken
+before the deletion still holds the subject key (sealed with the server's root key). Keep those
+backups short-lived, or rotate the root key, if forgetting has to cover them too.
+
+Rows of a forgotten subject stay in your tables as unreadable values: delete them, set them to
+`null`, or read them with `onUndecryptable: 'null'`.
+
 Other processes that already cached one of the subject's data keys keep it until the cache TTL
-ends. To cut that window, call `crypto.subjects.evict(id)` on every process, for example from your
-event bus.
+ends. To cut that window, call `crypto.subjects.evict({ type, id })` on every process, for example
+from your event bus.
 
 ## Rotation
 
@@ -187,11 +276,16 @@ event bus.
   ```
 
 - **Data keys**: `crypto.subjects.rotateDataKey(id)` starts a new data key for that subject's writes.
-  Old values keep opening; re-encrypt them with:
+  Old values keep opening. Other processes keep writing with the old data key until their cache
+  entry expires, so wait `ttlMs` before re-encrypting:
 
   ```sh
   node ace crypto:subjects:backfill '#models/note' --rotate
   ```
+
+  A data key uses random 96-bit IVs, which is safe for about 2³² encryptions. One subject writing
+  that much is unusual, but rotate a subject's data key well before (yearly, or every few million
+  writes) if it might.
 
 ## Cache and outages
 
@@ -216,6 +310,8 @@ Every failure is a `SubjectKeyError` with a `code`:
 | `invalid` | not a subject ciphertext, tampered, moved to another row/column/subject, or a misconfigured model |
 | `denied` | the token lacks a capability |
 | `sealed` | an encrypted attribute was read on a model loaded without its hooks |
+
+`decryptJson` and the encrypted columns never put the plaintext in an error message.
 | `failed` | anything else the crypto server reported |
 
 ```ts
@@ -246,7 +342,7 @@ key, the data key id and the `aad` (for columns: table, column and row id).
 import { memorySubjectKeys } from '@adonis-agora/crypto/testing'
 
 const { subjects } = memorySubjectKeys()
-const sealed = await subjects.encrypt(1, 'x')
+const sealed = await subjects.encrypt({ type: 'researcher', id: 1 }, 'x')
 ```
 
 Or boot the app with `subjects: { store: dataKeyStores.memory() }` and a standalone memory store.

@@ -27,7 +27,7 @@ import type { AuditListQuery } from '../src/crypto/service.js';
 import type { OperationListQuery } from '../src/operations.js';
 import type { CryptoStatus } from '../src/runtime.js';
 import { getRuntime, hasRuntime } from '../src/services/accessor.js';
-import type { SubjectId, SubjectKeys } from '../src/subjects/subject_keys.js';
+import type { SubjectKeys, SubjectRef } from '../src/subjects/subject_keys.js';
 
 /**
  * `import crypto from '@adonis-agora/crypto/services/main'` — every crypto operation of this app.
@@ -158,7 +158,7 @@ const crypto = {
    * Crypto-shredding: deletes the subject's key, so every value sealed for it is unrecoverable.
    * Same as `crypto.subjects.forget(subjectId)`.
    */
-  forgetSubject(subjectId: SubjectId): ReturnType<SubjectKeys['forget']> {
+  forgetSubject(subjectId: SubjectRef): ReturnType<SubjectKeys['forget']> {
     return crypto.subjects.forget(subjectId);
   },
 

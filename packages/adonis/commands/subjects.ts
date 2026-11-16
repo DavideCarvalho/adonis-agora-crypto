@@ -56,20 +56,27 @@ export class CryptoSubjectsBackfill extends SubjectsCommand {
   @flags.array({ description: 'Only these attributes (repeat the flag)' })
   declare column: string[];
 
+  @flags.boolean({
+    description: 'Skip values that cannot be processed (listed at the end) instead of stopping',
+  })
+  declare skipErrors: boolean;
+
   override async run(): Promise<void> {
     try {
       subjectsOf();
       const Model = await this.app.importDefault<BackfillModel & object>(this.model);
       const result = await backfillEncryptedColumns(Model as BackfillModel, {
         ...(this.batchSize !== undefined ? { batchSize: Number(this.batchSize) } : {}),
-        ...(this.from !== undefined ? { after: this.#cursor(this.from) } : {}),
+        // Kept as text: the database compares it with the key ("0042" must not become 42).
+        ...(this.from !== undefined ? { after: this.from } : {}),
+        ...(this.skipErrors ? { onError: 'skip' as const } : {}),
         ...(this.rotate ? { rotate: true } : {}),
         ...(this.dryRun ? { dryRun: true } : {}),
         ...(this.column?.length ? { columns: this.column } : {}),
         onBatch: (progress) => {
           if (this.json) return;
           this.logger.info(
-            `${progress.rows} rows · ${progress.encrypted} encrypted · ${progress.reencrypted} re-encrypted · ${progress.conflicts} conflicts · cursor ${String(progress.cursor)}`,
+            `${progress.rows} rows · ${progress.encrypted} encrypted · ${progress.reencrypted} re-encrypted · ${progress.moved} moved · ${progress.failed} failed · ${progress.conflicts} conflicts · cursor ${String(progress.cursor)}`,
           );
         },
       });
@@ -78,19 +85,25 @@ export class CryptoSubjectsBackfill extends SubjectsCommand {
         return;
       }
       this.logger.success(
-        `${this.dryRun ? '[dry run] ' : ''}${result.rows} rows: ${result.encrypted} encrypted, ${result.reencrypted} re-encrypted, ${result.unchanged} unchanged, ${result.conflicts} conflicts`,
+        `${this.dryRun ? '[dry run] ' : ''}${result.rows} rows: ${result.encrypted} encrypted, ${result.reencrypted} re-encrypted, ${result.moved} moved to their row's subject, ${result.unchanged} unchanged, ${result.failed} failed, ${result.conflicts} conflicts`,
       );
+      if (result.moved > 0) {
+        this.logger.warning(
+          'some values were sealed for another subject than their row (a query-builder update of the subject column?): they were re-sealed for the row',
+        );
+      }
+      for (const failure of result.failures) {
+        this.logger.error(
+          `${failure.id} ${failure.attribute}: [${failure.code}] ${failure.message}`,
+        );
+      }
+      if (result.failed > 0) this.exitCode = 1;
       if (result.conflicts > 0) {
         this.logger.warning('rows written concurrently were left alone; run the backfill again');
       }
     } catch (error) {
       this.fail(error);
     }
-  }
-
-  /** A numeric cursor for numeric primary keys, the string otherwise. */
-  #cursor(value: string): string | number {
-    return /^-?\d+$/.test(value) && Number.isSafeInteger(Number(value)) ? Number(value) : value;
   }
 }
 
@@ -103,6 +116,9 @@ export class CryptoSubjectsRewrapKeys extends SubjectsCommand {
   @flags.string({ description: 'Only this subject' })
   declare subject: string;
 
+  @flags.string({ description: 'Its type (the column `namespace`)' })
+  declare type: string;
+
   @flags.string({ description: 'Resume after this data key id' })
   declare from: string;
 
@@ -112,7 +128,9 @@ export class CryptoSubjectsRewrapKeys extends SubjectsCommand {
   override async run(): Promise<void> {
     try {
       const result = await subjectsOf().rewrapDataKeys({
-        ...(this.subject !== undefined ? { subject: this.subject } : {}),
+        ...(this.subject !== undefined
+          ? { subject: this.type ? { type: this.type, id: this.subject } : this.subject }
+          : {}),
         ...(this.from !== undefined ? { after: this.from } : {}),
         ...(this.batchSize !== undefined ? { batchSize: Number(this.batchSize) } : {}),
         onBatch: (progress) => {
@@ -145,13 +163,17 @@ export class CryptoSubjectsForget extends SubjectsCommand {
   @args.string({ description: 'Subject id' })
   declare subject: string;
 
+  @flags.string({ description: 'Subject type (the column `namespace`), e.g. researcher' })
+  declare type: string;
+
   @flags.boolean({ description: 'Do not ask for confirmation' })
   declare force: boolean;
 
   override async run(): Promise<void> {
     try {
       const subjects = subjectsOf();
-      const key = subjects.keyName(this.subject);
+      const subject = this.type ? { type: this.type, id: this.subject } : this.subject;
+      const key = subjects.keyName(subject);
       if (
         !this.force &&
         (await this.prompt.confirm(
@@ -161,7 +183,7 @@ export class CryptoSubjectsForget extends SubjectsCommand {
         this.logger.info('cancelled');
         return;
       }
-      const result = await subjects.forget(this.subject);
+      const result = await subjects.forget(subject);
       if (this.json) process.stdout.write(`${JSON.stringify(result)}\n`);
       else this.logger.success(`${result.key} deleted; ${result.dataKeys} data keys removed`);
     } catch (error) {

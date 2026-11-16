@@ -72,7 +72,9 @@ export interface CryptoSubjectsConfig {
   /** Key name of a subject: `${prefix}${id}`. Default `subject_`. */
   prefix?: string;
   /** Full control over the key name. Overrides `prefix`. */
-  keyName?: (subject: SubjectId) => string;
+  keyName?: (id: SubjectId, type: string | undefined) => string;
+  /** Refuse bare ids: every subject is `{ type, id }` (or a column `namespace`). Default `false`. */
+  requireType?: boolean;
   /** `lazy` (default): a subject's key is created on its first write. `explicit`: `subjects.create(id)` first. */
   createKeys?: 'lazy' | 'explicit';
   /**

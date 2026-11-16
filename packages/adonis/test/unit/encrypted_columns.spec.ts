@@ -13,7 +13,8 @@ import { inSchema, type SqlDatabase } from '../../src/sql.js';
 import { type BackfillModel, backfillEncryptedColumns } from '../../src/subjects/backfill.js';
 import { readSubjectCiphertext } from '../../src/subjects/ciphertext.js';
 import { SubjectKeyError } from '../../src/subjects/errors.js';
-import { encrypted, SealedValue } from '../../src/subjects/lucid.js';
+import { encrypted, SealedValue, UNDECRYPTABLE_EXTRA } from '../../src/subjects/lucid.js';
+import { addEncryptedColumnCheck, encryptedColumnCheck } from '../../src/subjects/migration.js';
 import { LucidDataKeyStore } from '../../src/subjects/store.js';
 import { SubjectKeys } from '../../src/subjects/subject_keys.js';
 import { memoryCrypto } from '../../src/testing/index.js';
@@ -97,6 +98,88 @@ class LegacyNote extends BaseModel {
   declare answers: Record<string, unknown> | null;
 }
 
+/** Bound to a mutable `slug`, namespaced, nulls what it cannot open. */
+class Doc extends BaseModel {
+  static override table = 'docs';
+  static override selfAssignPrimaryKey = true;
+
+  @column({ isPrimary: true })
+  declare id: string;
+
+  @column()
+  declare slug: string;
+
+  @column()
+  declare researcherId: number;
+
+  @encrypted({
+    subject: (doc: Doc) => doc.researcherId,
+    namespace: 'researcher',
+    row: (doc: Doc) => doc.slug,
+    onUndecryptable: 'null',
+    using: () => subjects,
+  })
+  declare body: string | null;
+}
+
+/** Legacy reads with a per-row cutoff and a counter. */
+let legacySeen: string[] = [];
+class CutoffNote extends BaseModel {
+  static override table = 'notes';
+  static override selfAssignPrimaryKey = true;
+
+  @column({ isPrimary: true })
+  declare id: string;
+
+  @column()
+  declare researcherId: number;
+
+  @column()
+  declare title: string;
+
+  @encrypted({
+    subject: (note: CutoffNote) => note.researcherId,
+    legacyPlaintext: (note: CutoffNote) => note.title === 'old',
+    onLegacyRead: (note: CutoffNote, attribute) => void legacySeen.push(`${note.id}.${attribute}`),
+    using: () => subjects,
+  })
+  declare body: string | null;
+}
+
+class JsonbNote extends BaseModel {
+  static override table = 'jsonb_notes';
+  static override selfAssignPrimaryKey = true;
+
+  @column({ isPrimary: true })
+  declare id: string;
+
+  @column()
+  declare researcherId: number;
+
+  @encrypted({
+    subject: (row: JsonbNote) => row.researcherId,
+    json: true,
+    legacyPlaintext: true,
+    using: () => subjects,
+  })
+  declare answers: unknown;
+}
+
+/** A table guarded by the CHECK constraint helper. */
+class Guarded extends BaseModel {
+  static override table = 'guarded';
+  static override selfAssignPrimaryKey = true;
+
+  @column({ isPrimary: true })
+  declare id: string;
+
+  @column()
+  declare researcherId: number;
+
+  @encrypted({ subject: (row: Guarded) => row.researcherId, using: () => subjects })
+  declare body: string | null;
+}
+
 for (const dialect of dialects) {
   describe(`encrypted columns (${dialect})`, () => {
     let database: Database;
@@ -160,6 +243,31 @@ for (const dialect of dialects) {
       await database.rawQuery(
         `CREATE TABLE ${table('surveys')} (id ${dialect === 'postgres' ? 'serial' : 'integer'} PRIMARY KEY ${dialect === 'sqlite' ? 'AUTOINCREMENT' : ''}, researcher_id integer NOT NULL, notes text NOT NULL)`,
       );
+      await database.rawQuery(
+        `CREATE TABLE ${table('docs')} (id varchar(36) PRIMARY KEY, slug text NOT NULL, researcher_id integer NOT NULL, body text NULL)`,
+      );
+      const check = encryptedColumnCheck({
+        column: 'body',
+        subjectColumn: 'researcher_id',
+        dialect,
+      });
+      if (dialect === 'sqlite') {
+        await database.rawQuery(
+          `CREATE TABLE guarded (id varchar(36) PRIMARY KEY, researcher_id integer NOT NULL, body text NULL, CHECK ${check})`,
+        );
+      } else {
+        await database.rawQuery(
+          `CREATE TABLE ${table('guarded')} (id varchar(36) PRIMARY KEY, researcher_id integer NOT NULL, body text NULL)`,
+        );
+        await database.rawQuery(
+          addEncryptedColumnCheck({
+            table: 'guarded',
+            column: 'body',
+            subjectColumn: 'researcher_id',
+            dialect,
+          }),
+        );
+      }
     });
 
     afterAll(async () => {
@@ -196,6 +304,9 @@ for (const dialect of dialects) {
       });
       await database.rawQuery(`DELETE FROM ${table('notes')}`);
       await database.rawQuery(`DELETE FROM ${table('surveys')}`);
+      await database.rawQuery(`DELETE FROM ${table('docs')}`);
+      await database.rawQuery(`DELETE FROM ${table('guarded')}`);
+      legacySeen = [];
       await database.rawQuery(`DELETE FROM ${table('crypto_data_keys')}`);
     });
 
@@ -309,7 +420,7 @@ for (const dialect of dialects) {
     it('never writes plaintext: saveQuietly and a missing row id throw', async () => {
       const note = new Note();
       note.merge({ id: randomUUID(), researcherId: 1, title: 't', body: 'secret' });
-      await expect(note.saveQuietly()).rejects.toThrow(/without encryption/);
+      await expect(note.saveQuietly()).rejects.toThrow(/without a matching encryption/);
       expect(await raw(`SELECT * FROM ${table('notes')}`)).toEqual([]);
 
       const noId = new Note();
@@ -512,6 +623,212 @@ for (const dialect of dialects) {
       expect(await raw(`SELECT * FROM ${table('notes')}`)).toEqual([]);
       expect(await raw(`SELECT * FROM ${table('crypto_data_keys')}`)).toEqual([]);
     });
+
+    it('refuses to move a partly-loaded row to another subject (the unloaded value would stay with the old owner)', async () => {
+      const note = await Note.create({ id: randomUUID(), researcherId: 1, title: 't', body: 'b' });
+      const partial = await Note.query()
+        .select('id', 'researcher_id', 'title')
+        .where('id', note.id)
+        .firstOrFail();
+      partial.researcherId = 2;
+      await expect(partial.save()).rejects.toThrow(/not loaded/);
+      const [row] = await raw(`SELECT researcher_id FROM ${table('notes')} WHERE id = ?`, [
+        note.id,
+      ]);
+      expect(Number(row!.researcher_id)).toBe(1);
+      // A partial row whose subject does not change saves normally.
+      partial.researcherId = 1;
+      partial.title = 'renamed';
+      await partial.save();
+      expect((await Note.findOrFail(note.id)).body).toBe('b');
+    });
+
+    it('a CHECK constraint stops query-builder writes of plaintext or of another subject', async () => {
+      const id = randomUUID();
+      await expect(
+        database.rawQuery(
+          `INSERT INTO ${table('guarded')} (id, researcher_id, body) VALUES (?, 1, 'plain')`,
+          [id],
+        ),
+      ).rejects.toThrow();
+      const row = await Guarded.create({ id, researcherId: 1, body: 'sealed' });
+      await expect(
+        Guarded.query().where('id', id).update({ body: 'plain again' }),
+      ).rejects.toThrow();
+      // Moving the row to another subject behind the model's back is refused too.
+      await expect(Guarded.query().where('id', id).update({ researcher_id: 2 })).rejects.toThrow();
+      // An underscore in the id is a literal, not a wildcard: subject 1 never matches subject 11.
+      await expect(Guarded.query().where('id', id).update({ researcher_id: 11 })).rejects.toThrow();
+      expect((await Guarded.findOrFail(row.id)).body).toBe('sealed');
+      const moved = await Guarded.findOrFail(row.id);
+      moved.researcherId = 2;
+      await moved.save();
+      expect((await Guarded.findOrFail(row.id)).body).toBe('sealed');
+    });
+
+    it('legacyPlaintext never treats another agora ciphertext as plaintext, honours a cutoff and counts reads', async () => {
+      const ct1 = randomUUID();
+      await database.rawQuery(
+        `INSERT INTO ${table('notes')} (id, researcher_id, title, body) VALUES (?, 1, 'old', 'agora:ct1:pii:1:abc')`,
+        [ct1],
+      );
+      await expect(LegacyNote.findOrFail(ct1)).rejects.toThrow(/another kind of agora ciphertext/);
+      const oldRow = randomUUID();
+      const newRow = randomUUID();
+      await database.rawQuery(
+        `INSERT INTO ${table('notes')} (id, researcher_id, title, body) VALUES (?, 1, 'old', 'before cutoff'), (?, 1, 'new', 'after cutoff')`,
+        [oldRow, newRow],
+      );
+      expect((await CutoffNote.findOrFail(oldRow)).body).toBe('before cutoff');
+      expect(legacySeen).toEqual([`${oldRow}.body`]);
+      await expect(CutoffNote.findOrFail(newRow)).rejects.toThrow(/not encrypted/);
+    });
+
+    it("onUndecryptable: 'null' keeps a listing working when one subject was forgotten", async () => {
+      await Doc.create({ id: randomUUID(), slug: 'a', researcherId: 1, body: 'gone soon' });
+      await Doc.create({ id: randomUUID(), slug: 'b', researcherId: 2, body: 'stays' });
+      await subjects.forget({ type: 'researcher', id: 1 });
+      const docs = await Doc.query().orderBy('slug', 'asc');
+      expect(docs.map((doc) => doc.body)).toEqual([null, 'stays']);
+      expect(docs[0]!.$extras[UNDECRYPTABLE_EXTRA]).toEqual(['body']);
+      expect(docs[0]!.$isDirty).toBe(false);
+      // An outage still throws: null is only for values that are gone or wrong.
+      subjects.clear();
+      down = true;
+      await expect(Doc.query()).rejects.toThrow(/unavailable/);
+    });
+
+    it('namespaces keep researcher 7 and project 7 apart', async () => {
+      const doc = await Doc.create({ id: randomUUID(), slug: 'n', researcherId: 7, body: 'x' });
+      const [row] = await raw(`SELECT body FROM ${table('docs')} WHERE id = ?`, [doc.id]);
+      expect(String(row!.body).startsWith('agora:se1:subject_researcher_7:')).toBe(true);
+    });
+
+    it('re-seals when the row binding changes, and refuses it on a partly-loaded row', async () => {
+      const doc = await Doc.create({
+        id: randomUUID(),
+        slug: 'first',
+        researcherId: 3,
+        body: 'bound',
+      });
+      const loaded = await Doc.findOrFail(doc.id);
+      loaded.slug = 'second';
+      await loaded.save();
+      expect((await Doc.findOrFail(doc.id)).body).toBe('bound');
+      const partial = await Doc.query()
+        .select('id', 'slug', 'researcher_id')
+        .where('id', doc.id)
+        .firstOrFail();
+      partial.slug = 'third';
+      await expect(partial.save()).rejects.toThrow(/not loaded/);
+    });
+
+    it('saveQuietly after a failed save cannot write a ciphertext bound to the old id', async () => {
+      const note = new Note();
+      const circular: Record<string, unknown> = {};
+      circular.self = circular;
+      note.merge({
+        id: randomUUID(),
+        researcherId: 1,
+        title: 't',
+        body: 'secret',
+        answers: circular,
+      });
+      await expect(note.save()).rejects.toThrow();
+      note.answers = null;
+      note.id = randomUUID();
+      await expect(note.saveQuietly()).rejects.toThrow(/without a matching encryption/);
+      expect(await raw(`SELECT * FROM ${table('notes')}`)).toEqual([]);
+      // A normal save afterwards works and binds to the new id.
+      await note.save();
+      expect((await Note.findOrFail(note.id)).body).toBe('secret');
+    });
+
+    it('row: false needs the subject column to read', async () => {
+      const survey = await Survey.create({ researcherId: 3, notes: 'n' });
+      await expect(
+        Survey.query().select('id', 'notes').where('id', survey.id).firstOrFail(),
+      ).rejects.toThrow(/select the subject column/);
+    });
+
+    it('updateOrCreate and firstOrCreate work (warm the subject first on SQLite)', async () => {
+      await subjects.warm(9);
+      const id = randomUUID();
+      const created = await Note.updateOrCreate({ id }, { researcherId: 9, body: 'v1' });
+      expect(created.body).toBe('v1');
+      const updated = await Note.updateOrCreate({ id }, { researcherId: 9, body: 'v2' });
+      expect(updated.body).toBe('v2');
+      const found = await Note.firstOrCreate({ id }, { researcherId: 9, body: 'ignored' });
+      expect(found.body).toBe('v2');
+      await database.transaction(async (trx) => {
+        const inTrx = await Note.findOrFail(id, { client: trx });
+        inTrx.body = 'v3';
+        await inTrx.useTransaction(trx).save();
+      });
+      expect((await Note.findOrFail(id)).body).toBe('v3');
+    });
+
+    it('backfill skips bad rows when asked, refuses other agora ciphertext and re-seals moved values loudly', async () => {
+      const good = '10000000-0000-4000-8000-000000000001';
+      const badJson = '10000000-0000-4000-8000-000000000002';
+      const ct1 = '10000000-0000-4000-8000-000000000003';
+      const moved = '10000000-0000-4000-8000-000000000004';
+      await database.rawQuery(
+        `INSERT INTO ${table('notes')} (id, researcher_id, title, body, answers) VALUES (?, 1, 't', 'fine', '{"a":1}'), (?, 1, 't', 'fine', '{not json'), (?, 1, 't', 'agora:ct1:pii:1:abc', NULL)`,
+        [good, badJson, ct1],
+      );
+      const note = await Note.create({ id: moved, researcherId: 1, body: 'mine' });
+      await database.rawQuery(`UPDATE ${table('notes')} SET researcher_id = 2 WHERE id = ?`, [
+        note.id,
+      ]);
+
+      await expect(
+        backfillEncryptedColumns(LegacyNote as unknown as BackfillModel),
+      ).rejects.toThrow(SubjectKeyError);
+      const result = await backfillEncryptedColumns(LegacyNote as unknown as BackfillModel, {
+        onError: 'skip',
+      });
+      expect(result.failed).toBe(2);
+      expect(result.failures.map((f) => `${f.id}:${f.attribute}:${f.code}`).sort()).toEqual([
+        `${badJson}:answers:invalid`,
+        `${ct1}:body:invalid`,
+      ]);
+      expect(JSON.stringify(result.failures)).not.toContain('not json');
+      expect(result.moved).toBe(1);
+      expect((await Note.findOrFail(moved)).body).toBe('mine');
+      const [row] = await raw(`SELECT body FROM ${table('notes')} WHERE id = ?`, [ct1]);
+      expect(row!.body).toBe('agora:ct1:pii:1:abc');
+    });
+
+    it('backfill with row: false refuses to adopt a value sealed for another subject', async () => {
+      const survey = await Survey.create({ researcherId: 1, notes: 'n' });
+      await database.rawQuery(`UPDATE ${table('surveys')} SET researcher_id = 2 WHERE id = ?`, [
+        survey.id,
+      ]);
+      const result = await backfillEncryptedColumns(Survey as unknown as BackfillModel, {
+        onError: 'skip',
+      });
+      expect(result).toMatchObject({ moved: 0, failed: 1 });
+      expect(result.failures[0]!.message).toMatch(/no row binding/);
+    });
+
+    it.skipIf(dialect !== 'postgres')(
+      'backfill refuses a jsonb column instead of guessing',
+      async () => {
+        await database.rawQuery(
+          `CREATE TABLE ${table('jsonb_notes')} (id varchar(36) PRIMARY KEY, researcher_id integer NOT NULL, answers jsonb NULL)`,
+        );
+        await database.rawQuery(
+          `INSERT INTO ${table('jsonb_notes')} (id, researcher_id, answers) VALUES (?, 1, '{"a":1}')`,
+          [randomUUID()],
+        );
+        const result = await backfillEncryptedColumns(JsonbNote as unknown as BackfillModel, {
+          onError: 'skip',
+        });
+        expect(result.failed).toBe(1);
+        expect(result.failures[0]!.message).toMatch(/not stored as text/);
+      },
+    );
 
     it('backfill refuses unknown columns', async () => {
       await expect(
