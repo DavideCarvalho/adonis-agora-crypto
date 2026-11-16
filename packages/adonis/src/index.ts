@@ -102,6 +102,8 @@ export {
   type CryptoConfig,
   type CryptoEnvelopeConfig,
   type CryptoEnvelopeTarget,
+  type CryptoSubjectsConfig,
+  dataKeyStores,
   defineConfig,
   type Factory,
   type FactoryContext,
@@ -150,6 +152,7 @@ export type {
   CryptoStore,
   KeyPolicyPatch,
 } from './store/store.js';
+export * from './subjects/index.js';
 export {
   bearerToken,
   checkVerifiedTenant,

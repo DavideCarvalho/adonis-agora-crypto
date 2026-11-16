@@ -8,13 +8,21 @@ import type { CryptoTransport, TenantTokenSource } from '@adonis-agora/crypto-co
 import type { CryptoKeyringConfig } from './crypto/keyring.js';
 import { LucidStore } from './store/lucid_store.js';
 import { MemoryStore } from './store/memory_store.js';
+import type { DataKeyCacheOptions } from './subjects/cache.js';
+import { type DataKeyStore, LucidDataKeyStore, MemoryDataKeyStore } from './subjects/store.js';
+import type { SubjectId } from './subjects/subject_keys.js';
 import type { TenantVerifierInput } from './topology/verify.js';
 import type { BrokerDriver } from './transports/broker.js';
 
 /** What store factories receive. */
 export interface FactoryContext {
-  /** A Lucid query client (the default connection when omitted). */
-  db(connection?: string): Promise<SqlDatabase>;
+  /** A Lucid query client (the default connection when omitted), optionally bound to a schema. */
+  db(connection?: string, schema?: string): Promise<SqlDatabase>;
+  /**
+   * The same, resolved again on every call (so a Lucid global transaction is used when one is
+   * open). Absent in custom contexts: fall back to `db`.
+   */
+  dbResolver?(connection?: string, schema?: string): Promise<() => SqlDatabase>;
   autoCreateSchema: boolean;
 }
 
@@ -33,6 +41,50 @@ export const stores = {
     return () => new MemoryStore();
   },
 };
+
+/** Where an app keeps the wrapped data keys of its subjects (`crypto_data_keys`). */
+export const dataKeyStores = {
+  /** In the app's database, through Lucid (Postgres, MySQL, SQLite). The default. */
+  lucid(
+    options: { connection?: string; autoCreateSchema?: boolean; schema?: string } = {},
+  ): Factory<DataKeyStore> {
+    return async (context) =>
+      new LucidDataKeyStore(
+        context.dbResolver
+          ? await context.dbResolver(options.connection, options.schema)
+          : await context.db(options.connection, options.schema),
+        {
+          autoCreateSchema: options.autoCreateSchema ?? context.autoCreateSchema,
+        },
+      );
+  },
+  /** In process memory: tests and local development. */
+  memory(): Factory<DataKeyStore> {
+    return () => new MemoryDataKeyStore();
+  },
+};
+
+/**
+ * Per-subject keys with local envelopes (`crypto.subjects`): one key per subject on the crypto
+ * server, values sealed in this process with cached data keys. Works in every topology.
+ */
+export interface CryptoSubjectsConfig {
+  /** Key name of a subject: `${prefix}${id}`. Default `subject_`. */
+  prefix?: string;
+  /** Full control over the key name. Overrides `prefix`. */
+  keyName?: (id: SubjectId, type: string | undefined) => string;
+  /** Refuse bare ids: every subject is `{ type, id }` (or a column `namespace`). Default `false`. */
+  requireType?: boolean;
+  /** `lazy` (default): a subject's key is created on its first write. `explicit`: `subjects.create(id)` first. */
+  createKeys?: 'lazy' | 'explicit';
+  /**
+   * Unwrapped data keys kept in memory: `{ maxEntries: 1000, ttlMs: 300_000 }` by default. `false`
+   * asks the crypto server on every read and write.
+   */
+  cache?: DataKeyCacheOptions | false;
+  /** Where the wrapped data keys live. Default `dataKeyStores.lucid()` (the app's database). */
+  store?: Factory<DataKeyStore>;
+}
 
 /** One outbound target: the origin itself, or the origin plus its own key. */
 export type CryptoEnvelopeTarget = string | { url: string; key?: string };
@@ -86,6 +138,8 @@ interface BaseConfig {
   maxBatchSize?: number;
   /** App-to-app encryption (interceptor + middleware). Nothing is installed when this is absent. */
   envelope?: CryptoEnvelopeConfig;
+  /** Per-subject keys and encrypted columns. Nothing is set up when this is absent. */
+  subjects?: CryptoSubjectsConfig;
 }
 
 /** An app that owns its keys locally and calls itself in process (no HTTP hop). */

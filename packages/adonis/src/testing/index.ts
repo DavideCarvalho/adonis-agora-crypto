@@ -5,10 +5,15 @@
 
 import { type CryptoKeyringConfig, createCryptoKeyring } from '../crypto/keyring.js';
 import { type CryptoPrincipal, CryptoService } from '../crypto/service.js';
+import { localOperations } from '../operations.js';
 import { MemoryStore } from '../store/memory_store.js';
+import type { DataKeyCacheOptions } from '../subjects/cache.js';
+import { MemoryDataKeyStore } from '../subjects/store.js';
+import { SubjectKeys } from '../subjects/subject_keys.js';
 
 export { LucidStore } from '../store/lucid_store.js';
 export { MemoryStore } from '../store/memory_store.js';
+export { MemoryDataKeyStore } from '../subjects/store.js';
 
 /** A keyring with one readable app key (the kit needs 16+ characters). */
 export function testKeyring(
@@ -72,4 +77,34 @@ export async function seedKeys(
   await crypto.service.createKey(principal, { name: 'inbox', type: 'x25519' });
   await crypto.service.createKey(principal, { name: 'webhook', type: 'ed25519' });
   await crypto.service.createKey(principal, { name: 'session', type: 'hmac-sha256' });
+}
+
+export interface MemorySubjectKeysOptions extends MemoryCryptoOptions {
+  /** Cache options, or `false`. Default: the production defaults. */
+  cache?: DataKeyCacheOptions | false;
+  prefix?: string;
+  createKeys?: 'lazy' | 'explicit';
+  requireType?: boolean;
+}
+
+/**
+ * Subject keys over an in-memory crypto server and an in-memory data-key store: `{ subjects,
+ * crypto, store }`. The server side (`crypto.service`) is there to inspect or break things.
+ */
+export function memorySubjectKeys(options: MemorySubjectKeysOptions = {}): {
+  subjects: SubjectKeys;
+  crypto: MemoryCrypto;
+  store: MemoryDataKeyStore;
+} {
+  const crypto = memoryCrypto(options);
+  const store = new MemoryDataKeyStore();
+  const subjects = new SubjectKeys({
+    operations: localOperations(crypto.service, crypto.principal),
+    store,
+    ...(options.cache !== undefined ? { cache: options.cache } : {}),
+    ...(options.prefix !== undefined ? { prefix: options.prefix } : {}),
+    ...(options.createKeys !== undefined ? { createKeys: options.createKeys } : {}),
+    ...(options.requireType !== undefined ? { requireType: options.requireType } : {}),
+  });
+  return { subjects, crypto, store };
 }

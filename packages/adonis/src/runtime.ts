@@ -4,6 +4,7 @@ import type { CryptoApi } from './http/api.js';
 import type { ResolvedInboundEnvelope } from './http/envelope_global.js';
 import type { CryptoOperations } from './operations.js';
 import type { CryptoStore } from './store/store.js';
+import type { SubjectKeys } from './subjects/subject_keys.js';
 import type { TenantVerifier } from './topology/verify.js';
 
 /** What a tenant loaded: who it is and what its token may do. */
@@ -42,6 +43,8 @@ export interface CryptoRuntime {
    * keep their own.
    */
   envelope?: ResolvedInboundEnvelope;
+  /** Set when `config/crypto.ts` has `subjects`: per-subject keys with local envelopes. */
+  subjects?: SubjectKeys;
   /**
    * The operations of one app, as one actor: a server builds them for the named partition (the
    * console, the CLI), a tenant ignores both (its token decides). Used by the ops commands.

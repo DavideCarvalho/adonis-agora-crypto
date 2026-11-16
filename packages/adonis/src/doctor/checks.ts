@@ -5,6 +5,7 @@ import { materialStatus } from '../crypto/reseal.js';
 import type { CryptoConfig, TenantTopologyConfig } from '../define_config.js';
 import type { CryptoRuntime } from '../runtime.js';
 import { getRuntime, hasRuntime } from '../services/accessor.js';
+import { legacyPlaintextColumns, legacyPlaintextReads } from '../subjects/lucid.js';
 import type { AgoraDoctorCheck, AgoraDoctorResult } from './agora_doctor.js';
 
 const DOCS = 'https://davidecarvalho.github.io/agora/docs/crypto';
@@ -254,6 +255,32 @@ export const agoraDoctorChecks: AgoraDoctorCheck[] = [
           : 'The console has no `authorize`: it is open to anyone who reaches it outside production.',
         fix: 'Set `console.authorize` (authkitDashboardAuthorize, or your own predicate).',
         docs: `${DOCS}/console`,
+      };
+    },
+  },
+  {
+    id: 'crypto.subjects',
+    lib: 'crypto',
+    title: 'Encrypted columns without plaintext fallback',
+    run: async (app): Promise<AgoraDoctorResult> => {
+      const config = configOf(app);
+      if (!config) return notBooted();
+      if (!config.subjects) {
+        return { status: 'skip', message: 'No `subjects` in config/crypto.ts.' };
+      }
+      const columns = legacyPlaintextColumns();
+      const reads = legacyPlaintextReads();
+      if (columns.length > 0 || reads > 0) {
+        return {
+          status: 'warn',
+          message: `\`legacyPlaintext\` is on${columns.length > 0 ? ` for ${columns.join(', ')}` : ''} (${reads} plaintext values read by this process): plaintext in those columns is served as data.`,
+          fix: 'Finish `node ace crypto:subjects:backfill`, add the CHECK constraint (encryptedColumnCheck), then remove `legacyPlaintext`.',
+          docs: `${DOCS}/subjects`,
+        };
+      }
+      return {
+        status: 'ok',
+        message: 'No encrypted column accepts plaintext (among the models loaded by this process).',
       };
     },
   },

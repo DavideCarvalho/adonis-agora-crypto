@@ -66,11 +66,25 @@ export const CRYPTO_SCOPES = {
 export const CRYPTO_WILDCARDS = ['crypto:*', 'crypto:encrypt:*', 'crypto:decrypt:*'] as const;
 
 /**
+ * Where the key name sits in a required capability: `crypto:<operation>:<key>` (index 2) or
+ * `crypto:keys:<scope>:<key>` (index 3). `-1` when it names no key: prefix matching applies there
+ * and nowhere else, so `crypto:d*:orders` or `crypto:keys:m*` never widen a grant.
+ */
+function keyNameIndex(want: readonly string[]): number {
+  if (want[0] !== 'crypto') return -1;
+  if (want[1] === 'keys') return want.length === 4 ? 3 : -1;
+  return want.length === 3 ? 2 : -1;
+}
+
+/**
  * Whether a token holding `granted` may do `required`. Segments are compared one by one; a `*`
  * matches one segment, and a trailing `*` matches every remaining segment. So `crypto:*` matches
  * everything, `crypto:encrypt:*` matches every key of `encrypt`, and `crypto:*:orders` matches
  * every operation on `orders` — but nothing is implied: a token with `crypto:encrypt:orders` cannot
  * decrypt, and a metadata capability never grants an operation.
+ *
+ * In the key-name segment only, a segment that ends in `*` after a prefix (`subject_*`) matches a
+ * key name starting with that prefix: `crypto:decrypt:subject_*` opens `subject_42`, not `orders`.
  */
 export function capabilityAllows(granted: readonly string[], required: string): boolean {
   const want = required.split(':');
@@ -81,6 +95,17 @@ export function capabilityAllows(granted: readonly string[], required: string): 
     for (let index = 0; index < have.length; index += 1) {
       const segment = have[index];
       if (segment === '*') continue;
+      if (
+        segment !== undefined &&
+        segment.length > 1 &&
+        segment.endsWith('*') &&
+        index === keyNameIndex(want) &&
+        (want[index] ?? '').length >= segment.length &&
+        (want[index] ?? '').startsWith(segment.slice(0, -1)) &&
+        !(want[index] ?? '').includes('*')
+      ) {
+        continue;
+      }
       if (index >= want.length || segment !== want[index]) {
         matched = false;
         break;
