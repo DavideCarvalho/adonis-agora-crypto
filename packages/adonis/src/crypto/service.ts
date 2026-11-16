@@ -45,6 +45,7 @@ import {
   sealedToKid,
   sealTo,
 } from '../crypto-kit/index.js';
+import { cryptoEventFor, emitCrypto, errorCodeOf } from '../diagnostics.js';
 import type {
   AuditFilters,
   AuditPageQuery,
@@ -223,9 +224,12 @@ export class CryptoService {
     operation: CryptoAuditOperation | null,
     key: string | undefined,
     required: string | readonly string[],
-    run: () => Promise<{ result: T; version?: number }>,
+    run: () => Promise<{ result: T; version?: number; bytes?: number }>,
     metadata?: Record<string, string | number | boolean>,
   ): Promise<T> {
+    const event = operation === null ? undefined : cryptoEventFor(operation);
+    // Only a well-formed key name reaches a diagnostics payload: the field is caller input.
+    const keyName = key === undefined ? undefined : isValidKeyName(key) ? key : '<invalid>';
     const capabilities = typeof required === 'string' ? [required] : required;
     const missing = capabilities.find(
       (capability) => !capabilityAllows(principal.capabilities, capability),
@@ -240,10 +244,46 @@ export class CryptoService {
           ...(metadata !== undefined ? { metadata } : {}),
         });
       }
+      if (event !== undefined) {
+        emitCrypto(
+          'denied',
+          () => ({
+            app: principal.partition,
+            op: event,
+            ...(keyName !== undefined ? { key: keyName } : {}),
+            capability: isValidKeyName(key) || key === undefined ? missing : '<invalid>',
+            errorCode: 'forbidden',
+            actor: principal.actor,
+            ...(principal.clientId !== undefined ? { clientId: principal.clientId } : {}),
+          }),
+          { app: principal.partition },
+        );
+      }
       throw new CryptoError('forbidden', `crypto: the token lacks ${missing}`);
     }
+    const started = performance.now();
+    // The service is the process that runs the operation, so it is the one that reports it.
+    const report = (outcome: { version?: number; bytes?: number; error?: unknown }) => {
+      if (event === undefined || keyName === undefined) return;
+      const durationMs = performance.now() - started;
+      emitCrypto(
+        event,
+        () => ({
+          app: principal.partition,
+          key: keyName,
+          ...(outcome.version !== undefined ? { version: outcome.version } : {}),
+          outcome: 'error' in outcome ? 'error' : 'ok',
+          ...('error' in outcome ? { errorCode: errorCodeOf(outcome.error) } : {}),
+          actor: principal.actor,
+          ...(principal.clientId !== undefined ? { clientId: principal.clientId } : {}),
+          durationMs,
+          ...(outcome.bytes !== undefined ? { bytes: outcome.bytes } : {}),
+        }),
+        { app: principal.partition, durationMs },
+      );
+    };
     try {
-      const { result, version } = await run();
+      const { result, version, bytes } = await run();
       if (operation !== null) {
         await this.#audit(principal, {
           operation,
@@ -253,6 +293,10 @@ export class CryptoService {
           ...(metadata !== undefined ? { metadata } : {}),
         });
       }
+      report({
+        ...(version !== undefined ? { version } : {}),
+        ...(bytes !== undefined ? { bytes } : {}),
+      });
       return result;
     } catch (error) {
       if (operation !== null) {
@@ -264,6 +308,7 @@ export class CryptoService {
           ...(metadata !== undefined ? { metadata } : {}),
         });
       }
+      report({ error });
       throw error;
     }
   }
@@ -658,6 +703,7 @@ export class CryptoService {
             }),
           },
           version: chosen.version,
+          bytes: Buffer.byteLength(plaintext),
         };
       }
       if (material.kind !== 'aes256-gcm') {
@@ -674,6 +720,7 @@ export class CryptoService {
           }),
         },
         version: chosen.version,
+        bytes: Buffer.byteLength(plaintext),
       };
     });
   }
@@ -764,6 +811,7 @@ export class CryptoService {
         return {
           result: { key: name, version: opened.version.version, plaintext: opened.plaintext },
           version: opened.version.version,
+          bytes: Buffer.byteLength(opened.plaintext),
         };
       },
       context !== undefined ? { context } : undefined,
@@ -869,6 +917,7 @@ export class CryptoService {
           signature: kitSign(material.privateKey, bytes),
         },
         version: chosen.version,
+        bytes: bytes.length,
       };
     });
   }
@@ -887,7 +936,10 @@ export class CryptoService {
         .filter((key): key is NonNullable<typeof key> => key !== undefined);
       // Verification accepts every version's public key: rotation must not invalidate signatures
       // made before it.
-      return { result: { key: name, valid: kitVerify(keys, bytes, signature) } };
+      return {
+        result: { key: name, valid: kitVerify(keys, bytes, signature) },
+        bytes: bytes.length,
+      };
     });
   }
 
@@ -899,10 +951,15 @@ export class CryptoService {
       this.#assertType(record, ['hmac-sha256'], 'hmac');
       const chosen = await this.#versionFor(record, undefined);
       const material = await this.#material(record, chosen);
+      const message = bytesOf(input.message, input.encoding);
       const digest = createHmac('sha256', symmetricKeyOf(material))
-        .update(bytesOf(input.message, input.encoding))
+        .update(message)
         .digest('base64url');
-      return { result: { key: name, hmac: digest }, version: chosen.version };
+      return {
+        result: { key: name, hmac: digest },
+        version: chosen.version,
+        bytes: message.length,
+      };
     });
   }
 

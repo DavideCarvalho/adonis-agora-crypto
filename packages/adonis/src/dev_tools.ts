@@ -116,13 +116,19 @@ const LIMIT: DevToolInputProperty = {
  */
 export function cryptoDevTools(
   service: CryptoService,
-  options: { actorFor: (call: DevToolCall) => string },
+  options: {
+    actorFor: (call: DevToolCall) => string;
+    /** Whether the caller may read this app (the console's static `apps` and its grant). */
+    appAllowed?: (ctx: HttpContext, app: string) => Promise<boolean>;
+  },
 ): DevTool[] {
-  const read = (input: Record<string, unknown>, call: DevToolCall) => ({
-    partition: required(input, 'app'),
-    capabilities: ['crypto:keys:read'],
-    actor: options.actorFor(call),
-  });
+  const read = async (input: Record<string, unknown>, call: DevToolCall) => {
+    const partition = required(input, 'app');
+    if (options.appAllowed && !(await options.appAllowed(call.ctx, partition))) {
+      throw new Error(`crypto: app "${partition}" is not granted to this caller`);
+    }
+    return { partition, capabilities: ['crypto:keys:read'], actor: options.actorFor(call) };
+  };
 
   return [
     {
@@ -141,7 +147,7 @@ export function cryptoDevTools(
         required: ['app'],
       },
       run: async (input, call) => {
-        const principal = read(input, call);
+        const principal = await read(input, call);
         const { page, size } = paging(input, call);
         const result = await service.listKeys(principal, {
           page,
@@ -177,7 +183,7 @@ export function cryptoDevTools(
         required: ['app', 'key'],
       },
       run: async (input, call) => {
-        const view = await service.getKey(read(input, call), required(input, 'key'));
+        const view = await service.getKey(await read(input, call), required(input, 'key'));
         return view;
       },
     },
@@ -204,7 +210,7 @@ export function cryptoDevTools(
         required: ['app'],
       },
       run: async (input, call) => {
-        const principal = read(input, call);
+        const principal = await read(input, call);
         const { page, size } = paging(input, call);
         const result = await service.audit(principal, {
           page,
@@ -231,7 +237,7 @@ export function cryptoDevTools(
       description:
         'Counters for one app: keys, versions, operations in the last 24h, denied and failed operations, and when the last operation happened.',
       input: { type: 'object', properties: { app: APP }, required: ['app'] },
-      run: async (input, call) => service.overview(read(input, call)),
+      run: async (input, call) => service.overview(await read(input, call)),
     },
   ];
 }
@@ -243,6 +249,7 @@ export async function registerCryptoDevTools(
     service: CryptoService;
     authorize: (ctx: HttpContext) => Promise<DevToolsDecision>;
     actorFor?: (call: DevToolCall) => string;
+    appAllowed?: (ctx: HttpContext, app: string) => Promise<boolean>;
   },
 ): Promise<boolean> {
   if (!container.hasBinding(DEV_TOOLS_BINDING)) return false;
@@ -254,6 +261,7 @@ export async function registerCryptoDevTools(
     authorize: options.authorize,
     tools: cryptoDevTools(options.service, {
       actorFor: options.actorFor ?? ((call) => `mcp:${call.caller.id}`),
+      ...(options.appAllowed ? { appAllowed: options.appAllowed } : {}),
     }),
   });
   return true;

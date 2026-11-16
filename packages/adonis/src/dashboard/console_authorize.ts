@@ -11,7 +11,15 @@ import type { HttpContext } from '@adonisjs/core/http';
 /** What an authorizer may answer. */
 export type ConsoleAuthorizeResult =
   | boolean
-  | { allowed: true }
+  | {
+      allowed: true;
+      /**
+       * The apps (partitions) this viewer may operate on: `'*'` or omitted is every app the
+       * console serves (`console.apps` stays the upper bound). The same field as telescope's and
+       * flags' consoles.
+       */
+      apps?: '*' | string[];
+    }
   | { allowed: false; reason?: 'unauthenticated' | 'forbidden' }
   | { redirectTo: string };
 
@@ -31,7 +39,7 @@ export type ConsoleAuthorize =
 
 /** A {@link ConsoleAuthorizeResult} normalized to the answer the console writes. */
 export type ConsoleAuthorizeDecision =
-  | { allowed: true }
+  | { allowed: true; apps?: '*' | string[] }
   | { allowed: false; status: 401; reason: 'unauthenticated' }
   | { allowed: false; status: 403; reason: 'forbidden'; error?: unknown }
   | { allowed: false; status: 302; redirectTo: string };
@@ -61,7 +69,10 @@ export function normalizeConsoleAuthorizeResult(result: unknown): ConsoleAuthori
   if (result === true) return { allowed: true };
   if (typeof result !== 'object' || result === null) return FORBIDDEN;
   const value = result as { allowed?: unknown; reason?: unknown; redirectTo?: unknown };
-  if (value.allowed === true) return { allowed: true };
+  if (value.allowed === true) {
+    const apps = appsGrant((result as { apps?: unknown }).apps);
+    return apps === undefined ? { allowed: true } : { allowed: true, apps };
+  }
   if (value.allowed === undefined && typeof value.redirectTo === 'string' && value.redirectTo) {
     return { allowed: false, status: 302, redirectTo: value.redirectTo };
   }
@@ -69,6 +80,35 @@ export function normalizeConsoleAuthorizeResult(result: unknown): ConsoleAuthori
     return { allowed: false, status: 401, reason: 'unauthenticated' };
   }
   return FORBIDDEN;
+}
+
+/** An `apps` grant: `'*'`, a list of names (anything else in it is dropped), or `undefined`. */
+function appsGrant(value: unknown): '*' | string[] | undefined {
+  if (value === '*') return '*';
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((app): app is string => typeof app === 'string' && app !== '');
+}
+
+/**
+ * Whether a viewer may operate on `app`: inside the console's static `apps` (when set) and inside
+ * the viewer's grant (`'*'` or omitted: every app).
+ */
+export function consoleAppAllowed(
+  app: string,
+  staticApps: readonly string[] | undefined,
+  grant: '*' | string[] | undefined,
+): boolean {
+  if (staticApps !== undefined && !staticApps.includes(app)) return false;
+  return grant === undefined || grant === '*' || grant.includes(app);
+}
+
+/** The apps of `all` a viewer may see (see {@link consoleAppAllowed}). */
+export function consoleVisibleApps(
+  all: readonly string[],
+  staticApps: readonly string[] | undefined,
+  grant: '*' | string[] | undefined,
+): string[] {
+  return all.filter((app) => consoleAppAllowed(app, staticApps, grant));
 }
 
 async function instantiate(
@@ -124,6 +164,8 @@ export function resolveConsoleAuthorize(
 export interface AuthorizeByTokenOptions {
   /** The shared secret callers send as `Authorization: Bearer <token>`. */
   token: string | undefined;
+  /** The apps a token holder may operate on (`'*'`, the default, is every app). */
+  apps?: '*' | string[];
 }
 
 function digest(value: string): Buffer {
@@ -147,10 +189,12 @@ export function authorizeByToken(options: AuthorizeByTokenOptions): ConsoleAutho
     throw new Error('[@adonis-agora/crypto] authorizeByToken: `token` must be a non-empty string');
   }
   const expected = digest(token);
+  const allowed: ConsoleAuthorizeResult =
+    options.apps !== undefined ? { allowed: true, apps: options.apps } : { allowed: true };
   return (ctx: HttpContext): ConsoleAuthorizeResult => {
     const header = ctx.request.header('authorization');
     const match = typeof header === 'string' ? /^Bearer\s+(.+)$/i.exec(header.trim()) : null;
-    if (match?.[1] && timingSafeEqual(digest(match[1]), expected)) return { allowed: true };
+    if (match?.[1] && timingSafeEqual(digest(match[1]), expected)) return allowed;
     return { allowed: false, reason: 'unauthenticated' };
   };
 }
@@ -182,7 +226,8 @@ export function anyAuthorize(
     let threw = false;
     for (const authorize of resolved) {
       const decision = await authorize(ctx);
-      if (decision.allowed) return { allowed: true };
+      // The first check that allows decides, with its `apps` grant.
+      if (decision.allowed) return decision;
       if (decision.status === 302) {
         redirectTo ??= decision.redirectTo;
         continue;

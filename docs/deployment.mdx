@@ -77,6 +77,23 @@ import crypto from '@adonis-agora/crypto/services/main'
 const { ciphertext } = await crypto.encrypt({ key: 'media', plaintext: url })
 ```
 
+`url` can also be a function, resolved before the first call. With authkit, let the issuer tell
+the tenant where the server is:
+
+```ts
+import { controlPlaneUrl } from '@adonis-agora/authkit-client'
+
+tenant: {
+  url: controlPlaneUrl({ issuer: env.get('AUTHKIT_ISSUER'), resource: 'urn:agora:crypto' }),
+  partition: 'streaming',
+  token,
+},
+```
+
+After a connection error or a `404` from a route that is not there, the URL is looked up again
+(with the function's `refresh()` when it has one) and the call is retried once on the new URL.
+`transports.http({ url })` takes the same function.
+
 The tenant keeps no key material: the server holds the keys, enforces the token's capabilities
 (`crypto:encrypt:<key>`, `crypto:decrypt:<key>`, …) and audits every call. On boot it asks `whoami`
 and logs the answer; a wrong token or URL is a warning, not a boot failure.

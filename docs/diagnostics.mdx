@@ -1,0 +1,45 @@
+---
+title: Diagnostics events
+description: What crypto publishes on the @adonis-agora/diagnostics bus, and from which process.
+icon: Activity
+---
+
+With [`@adonis-agora/diagnostics`](/docs/diagnostics) installed, crypto publishes every key operation
+on `agora:crypto:<event>`. Telescope records them as `diagnostic` entries tagged `lib:crypto` and
+`app:<partition>`, and you can listen with `onDiagnostic('crypto', …)`. Without diagnostics,
+nothing is published.
+
+```ts title="start/diagnostics.ts"
+import { onDiagnostic } from '@adonis-agora/diagnostics'
+
+onDiagnostic('crypto', 'denied', (event) => {
+  logger.warn({ app: event.app, ...event.payload }, 'crypto call refused')
+})
+```
+
+## Events
+
+| Event | Payload |
+| --- | --- |
+| `encrypt`, `decrypt`, `rewrap`, `datakey`, `sign`, `verify`, `hmac` | `app`, `key`, `version?`, `outcome` (`ok`/`error`), `errorCode?`, `actor`, `clientId?`, `durationMs`, `bytes?` |
+| `keys.create`, `keys.rotate`, `keys.policy`, `keys.delete`, `keys.export` | the same |
+| `denied` | `app`, `op` (the event it would have been), `key?`, `capability`, `errorCode: 'forbidden'`, `actor`, `clientId?` |
+| `subjects.forget` | `app?`, `key` (the subject key), `outcome`, `errorCode?`, `dataKeys?`, `durationMs` |
+| `subjects.cache` | `app?`, `key`, `op` (`encrypt`/`decrypt`), `outcome: 'miss'` |
+
+`bytes` is the size of the plaintext (or the signed message). A payload never carries plaintext,
+ciphertext, key material, AAD or the audit `context`, and an error is reported by its code only.
+Reads (`keys.list`, `keys.get`, public keys, the audit) publish nothing.
+
+## Which process publishes
+
+The process that runs the operation publishes it, with `app` on the envelope set to the partition it
+acted on:
+
+- **standalone**: the app itself, with its own `app`.
+- **control plane**: the server, with `app` = the tenant named by the verified token (or the app
+  picked in the console).
+- **tenant**: nothing for the operations it sends to the server (the server publishes those). It
+  publishes only what the server cannot see: `subjects.cache` when a subject data key was not in its
+  cache and had to come from the server (cache hits are not published), and `subjects.forget` for the data
+  keys it removes from its own database.
