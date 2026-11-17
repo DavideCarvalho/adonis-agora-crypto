@@ -1,13 +1,17 @@
 import { useQuery } from '@tanstack/react-query';
-import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { parseAsString, useQueryState } from 'nuqs';
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIcon,
   AppShell,
   DocumentIcon,
   ErrorBoundary,
+  NuqsHashAdapter,
   PageBody,
   readShellConfig,
   ServerIcon,
+  splitHash,
+  subscribeHashUrl,
 } from '../agora-kit';
 import { Skeleton } from '../agora-kit/ui/skeleton';
 import { CryptoApi, type Meta, readBootstrap } from '../client/crypto-client';
@@ -36,32 +40,52 @@ const TITLES: Record<Page, string> = {
 
 function readRoute(): Route {
   const hash = typeof window === 'undefined' ? '' : window.location.hash;
-  const [path, search] = hash.replace(/^#\/?/, '').split('?');
-  const params = new URLSearchParams(search ?? '');
+  const { path: rawPath, search } = splitHash(hash);
+  const path = rawPath.replace(/^\/?/, '');
+  const params = new URLSearchParams(search);
   const key = params.get('key') ?? undefined;
   if (path === 'audit') return { page: 'audit' };
   if (path === 'keys') return key ? { page: 'key', key } : { page: 'keys' };
   return { page: 'overview' };
 }
 
-function useRoute(): [Route, (route: Route) => void] {
+function sameRoute(a: Route, b: Route): boolean {
+  return a.page === b.page && a.key === b.key;
+}
+
+/**
+ * The page is the hash's path (`#/keys`, `#/keys?key=<name>` for one key); each page's view state
+ * (search, filters, page) and the topbar's app ride in the hash's query, written by nuqs through
+ * the kit's `NuqsHashAdapter`. Moving to another page keeps the app and drops the old page's view
+ * state. `app` overrides the app carried along (`null` = the default).
+ */
+function useRoute(): [Route, (route: Route, app?: string | null) => void] {
   const [route, setRoute] = useState<Route>(readRoute);
-  useEffect(() => {
-    const onChange = () => setRoute(readRoute());
-    window.addEventListener('hashchange', onChange);
-    return () => window.removeEventListener('hashchange', onChange);
+  // Follows links, back/forward and query-only writes (which fire no `hashchange`).
+  useEffect(
+    () =>
+      subscribeHashUrl(() =>
+        setRoute((prev) => {
+          const next = readRoute();
+          return sameRoute(prev, next) ? prev : next;
+        }),
+      ),
+    [],
+  );
+  const go = useCallback((next: Route, app?: string | null) => {
+    const query = new URLSearchParams();
+    if (next.page === 'key' && next.key) query.set('key', next.key);
+    const carried =
+      app !== undefined
+        ? app
+        : new URLSearchParams(splitHash(window.location.hash).search).get('app');
+    if (carried !== null) query.set('app', carried);
+    const path = next.page === 'key' ? '/keys' : `/${next.page}`;
+    const rest = query.toString();
+    window.location.hash = rest === '' ? `#${path}` : `#${path}?${rest}`;
+    setRoute(next);
   }, []);
-  return [
-    route,
-    (next) => {
-      const hash =
-        next.page === 'key' && next.key
-          ? `#/keys?key=${encodeURIComponent(next.key)}`
-          : `#/${next.page}`;
-      window.location.hash = hash;
-      setRoute(next);
-    },
-  ];
+  return [route, go];
 }
 
 function LogoMark() {
@@ -130,7 +154,19 @@ function MetaScreen({ error }: { error: unknown }) {
   );
 }
 
+/**
+ * The crypto console, wrapped in the kit's `NuqsHashAdapter`: the picked app and each page's view
+ * state live in the hash's query (`#/audit?app=billing&result=denied`), so a view is a link.
+ */
 export function App() {
+  return (
+    <NuqsHashAdapter>
+      <Console />
+    </NuqsHashAdapter>
+  );
+}
+
+function Console() {
   const bootstrap = useMemo(() => readBootstrap(), []);
   const shell = useMemo(() => readShellConfig('crypto-dashboard-config'), []);
   const api = useMemo(() => (bootstrap ? new CryptoApi(bootstrap.api) : null), [bootstrap]);
@@ -141,12 +177,18 @@ export function App() {
     enabled: api !== null,
     retry: false,
   });
-  const [partition, setPartition] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!meta.data || partition !== null) return;
-    setPartition(bootstrap?.app ?? meta.data.defaultPartition);
-  }, [meta.data, partition, bootstrap]);
+  // The app (partition) picked in the topbar: `?app=` in the hash, else the bootstrap's / the
+  // server's default. Picking the default again takes it out of the URL.
+  const [pickedApp, setPickedApp] = useQueryState(
+    'app',
+    parseAsString.withOptions({ history: 'push' }),
+  );
+  const defaultPartition = meta.data ? (bootstrap?.app ?? meta.data.defaultPartition) : null;
+  const partition = defaultPartition === null ? null : (pickedApp ?? defaultPartition);
+  const setPartition = useCallback(
+    (next: string) => void setPickedApp(next === defaultPartition ? null : next),
+    [defaultPartition, setPickedApp],
+  );
 
   if (bootstrap === null || api === null) {
     return (
@@ -232,9 +274,10 @@ export function App() {
             value={partition}
             options={apps}
             onChange={(next) => {
-              setPartition(next);
               // A key belongs to one app: going back to the list avoids showing a 404 page.
-              if (route.page === 'key') go({ page: 'keys' });
+              if (route.page === 'key')
+                go({ page: 'keys' }, next === defaultPartition ? null : next);
+              else setPartition(next);
             }}
           />
         }

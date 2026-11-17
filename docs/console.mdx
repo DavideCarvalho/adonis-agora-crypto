@@ -28,6 +28,11 @@ no export button — exporting is a CLI decision that a person makes deliberatel
 
 The app picker in the topbar switches between the apps (partitions) the server holds.
 
+Filters are in the URL: copy the link to share a filtered view. The picked app (`app`), the Keys
+search and page (`q`, `page`) and the Audit filters and page (`key`, `operation`, `result`, `page`)
+live in the hash, so `/_crypto#/audit?app=billing&result=denied` opens billing's denied calls, and
+back/forward step through your picks.
+
 ## Gating it
 
 ```ts title="config/crypto.ts"
