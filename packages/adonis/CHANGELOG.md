@@ -1,5 +1,11 @@
 # @adonis-agora/crypto
 
+## 0.11.3
+
+### Patch Changes
+
+- [#29](https://github.com/DavideCarvalho/adonis-agora-crypto/pull/29) [`d20ceb5`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/d20ceb5749a675155f9d66a82715904b6ff3ba99) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Ships the console with its filters in the URL (copy the link to share a filtered view). The console is bundled into this package at build time, so it needs its own release to reach apps.
+
 ## 0.11.2
 
 ### Patch Changes
