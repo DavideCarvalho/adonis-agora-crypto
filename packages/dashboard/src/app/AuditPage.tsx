@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { parseAsInteger, parseAsString, useQueryStates } from 'nuqs';
 import { EmptyState, PageHeader, Pager, Panel, QueryBoundary } from '../agora-kit';
 import { type Column, DataTable } from '../agora-kit/blocks/data-table';
 import { Badge } from '../agora-kit/ui/badge';
@@ -81,12 +81,22 @@ const columns: Column<AuditRow>[] = [
   },
 ];
 
+/**
+ * The audit trail's view, in the hash's query (`#/audit?operation=decrypt&result=denied&page=2`).
+ * Picking an operation, a result or a page adds a history entry; typing the key replaces it. Any
+ * filter change goes back to page 1.
+ */
+export const auditParams = {
+  page: parseAsInteger.withDefault(1).withOptions({ history: 'push' }),
+  operation: parseAsString.withDefault('').withOptions({ history: 'push' }),
+  result: parseAsString.withDefault('').withOptions({ history: 'push' }),
+  key: parseAsString.withDefault(''),
+};
+
 export function AuditPage() {
   const { api, partition } = useConsole();
-  const [page, setPage] = useState(1);
-  const [operation, setOperation] = useState('');
-  const [result, setResult] = useState('');
-  const [key, setKey] = useState('');
+  const [{ page, operation, result, key }, setView] = useQueryStates(auditParams);
+  const setPage = (next: number) => void setView({ page: next });
   const query = useQuery({
     queryKey: ['audit', partition, page, operation, result, key],
     queryFn: () =>
@@ -116,19 +126,15 @@ export function AuditPage() {
               placeholder="key"
               className="h-7 w-32 text-[11px]"
               value={key}
-              onChange={(event) => {
-                setKey(event.target.value);
-                setPage(1);
-              }}
+              onChange={(event) =>
+                void setView({ key: event.target.value, page: null }, { history: 'replace' })
+              }
             />
             <select
               aria-label="Operation"
               className="h-7 rounded-md border border-border bg-panel-2 px-1.5 text-[11px] text-dim"
               value={operation}
-              onChange={(event) => {
-                setOperation(event.target.value);
-                setPage(1);
-              }}
+              onChange={(event) => void setView({ operation: event.target.value, page: null })}
             >
               <option value="">every operation</option>
               {OPERATIONS.map((entry) => (
@@ -141,10 +147,7 @@ export function AuditPage() {
               aria-label="Result"
               className="h-7 rounded-md border border-border bg-panel-2 px-1.5 text-[11px] text-dim"
               value={result}
-              onChange={(event) => {
-                setResult(event.target.value);
-                setPage(1);
-              }}
+              onChange={(event) => void setView({ result: event.target.value, page: null })}
             >
               <option value="">every result</option>
               <option value="ok">ok</option>

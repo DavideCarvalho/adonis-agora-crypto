@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { parseAsInteger, parseAsString, useQueryStates } from 'nuqs';
 import { useState } from 'react';
 import {
   ActionDialog,
@@ -40,11 +41,19 @@ function Flag({ on, children }: { on: boolean; children: React.ReactNode }) {
   return on ? <Badge variant="warn">{children}</Badge> : null;
 }
 
+/** The key list's view in the hash's query. */
+export const keysParams = {
+  q: parseAsString.withDefault(''),
+  page: parseAsInteger.withDefault(1).withOptions({ history: 'push' }),
+};
+
 export function KeysPage({ onOpen }: { onOpen: (name: string) => void }) {
   const { api, partition } = useConsole();
   const client = useQueryClient();
-  const [search, setSearch] = useState('');
-  const [page, setPage] = useState(1);
+  // `#/keys?q=billing&page=2`: typing replaces the history entry (and goes back to page 1), a page
+  // pick adds one. `key` is taken: it names the open key (`#/keys?key=<name>`).
+  const [{ q: search, page }, setView] = useQueryStates(keysParams);
+  const setPage = (next: number) => void setView({ page: next });
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState<Form>(emptyForm);
   const [deleting, setDeleting] = useState<Key | null>(null);
@@ -213,10 +222,9 @@ export function KeysPage({ onOpen }: { onOpen: (name: string) => void }) {
               placeholder="search name or description"
               className="h-7 w-52 text-[11.5px]"
               value={search}
-              onChange={(event) => {
-                setSearch(event.target.value);
-                setPage(1);
-              }}
+              onChange={(event) =>
+                void setView({ q: event.target.value, page: null }, { history: 'replace' })
+              }
             />
           </Toolbar>
         }
