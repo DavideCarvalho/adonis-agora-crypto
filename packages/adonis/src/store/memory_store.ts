@@ -3,6 +3,8 @@ import type { CryptoAuditRecord } from '@adonis-agora/crypto-core';
 import {
   type AuditCounts,
   type AuditPageQuery,
+  type AuditPosition,
+  type AuditSeekQuery,
   type CryptoKeyRecord,
   type CryptoKeyVersionRecord,
   type CryptoStore,
@@ -25,6 +27,12 @@ function page<T>(rows: T[], query: { page: number; size: number }) {
       firstPage: 1,
     },
   };
+}
+
+/** `(at, id)` ascending. */
+function auditOrder(a: AuditPosition, b: AuditPosition): number {
+  if (a.at !== b.at) return a.at < b.at ? -1 : 1;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
 /**
@@ -172,8 +180,28 @@ export class MemoryStore implements CryptoStore {
           (filters.result === undefined || row.result === filters.result) &&
           (filters.actor === undefined || row.actor === filters.actor),
       )
-      .sort((a, b) => (query.sort === 'asc' ? a.at.localeCompare(b.at) : b.at.localeCompare(a.at)));
+      // `(at, id)`, like the SQL store: rows that share `at` keep one stable order across pages.
+      .sort((a, b) => auditOrder(a, b) * (query.sort === 'asc' ? 1 : -1));
     return page(rows, query);
+  }
+
+  async seekAudit(partition: string, query: AuditSeekQuery): Promise<CryptoAuditRecord[]> {
+    const filters = query.filters ?? {};
+    const sign = query.order === 'asc' ? 1 : -1;
+    const compare = auditOrder;
+    const from = query.from;
+    return (this.#audit.get(partition) ?? [])
+      .filter(
+        (row) =>
+          (filters.key === undefined || row.key === filters.key) &&
+          (filters.operation === undefined || row.operation === filters.operation) &&
+          (filters.result === undefined || row.result === filters.result) &&
+          (filters.actor === undefined || row.actor === filters.actor) &&
+          (from === undefined || compare(row, from) * sign > 0),
+      )
+      .sort((a, b) => compare(a, b) * sign)
+      .slice(0, query.limit)
+      .map((row) => ({ ...row }));
   }
 
   async auditCounts(partition: string, since: string): Promise<AuditCounts> {

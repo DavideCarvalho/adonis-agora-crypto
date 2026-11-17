@@ -11,6 +11,7 @@ import {
   type CryptoKeyVersionView,
   type CryptoKeyView,
   type CryptoOverview,
+  type CursorPage,
   capabilityAllows,
   cryptoScope,
   type DataKeyInput,
@@ -36,6 +37,7 @@ import {
   type VerifyResult,
   type Whoami,
 } from '@adonis-agora/crypto-core';
+import { decodeCursor, encodeCursor } from '@adonis-agora/filter';
 import {
   type JwkSource,
   type Keyring,
@@ -49,6 +51,7 @@ import { cryptoEventFor, emitCrypto, errorCodeOf } from '../diagnostics.js';
 import type {
   AuditFilters,
   AuditPageQuery,
+  AuditPosition,
   CryptoKeyRecord,
   CryptoKeyVersionRecord,
   CryptoStore,
@@ -99,6 +102,32 @@ export interface AuditListQuery {
   sort?: 'asc' | 'desc';
   filters?: AuditFilters;
 }
+
+/** {@link CryptoService.auditCursor}: keyset paging, no total. */
+export interface AuditCursorQuery {
+  size: number;
+  /** Opaque cursor from `meta.nextCursor`: the page after it. Wins over `before`. */
+  after?: string;
+  /** Opaque cursor from `meta.prevCursor`: the page before it. */
+  before?: string;
+  sort?: 'asc' | 'desc';
+  filters?: AuditFilters;
+}
+
+function positionOf(cursor: string): AuditPosition {
+  const values = decodeCursor(cursor);
+  if (
+    values === null ||
+    values.length !== 2 ||
+    typeof values[0] !== 'string' ||
+    typeof values[1] !== 'string'
+  ) {
+    throw new CryptoError('invalid', 'crypto: invalid cursor');
+  }
+  return { at: values[0], id: values[1] };
+}
+
+const cursorOf = (row: CryptoAuditRecord) => encodeCursor([row.at, row.id]);
 
 const MAX_AAD = 512;
 const MAX_CONTEXT = 200;
@@ -1097,6 +1126,54 @@ export class CryptoService {
         ...(query.filters !== undefined ? { filters: query.filters } : {}),
       } satisfies AuditPageQuery),
     }));
+  }
+
+  /**
+   * The audit trail by keyset: `(at, id)` seek, one row more than the page to know whether another
+   * follows, no count. What the console pages with.
+   */
+  async auditCursor(
+    principal: CryptoPrincipal,
+    query: AuditCursorQuery,
+  ): Promise<CursorPage<CryptoAuditRecord>> {
+    this.#assertPartition(principal);
+    const sort = query.sort ?? 'desc';
+    const backward = query.after === undefined && query.before !== undefined;
+    const cursor = query.after ?? query.before;
+    return this.#perform(principal, null, undefined, 'crypto:keys:read', async () => {
+      const seek = this.store.seekAudit?.bind(this.store);
+      if (seek === undefined) {
+        throw new CryptoError('unsupported', 'crypto: this store cannot page the audit by cursor');
+      }
+      const from = cursor !== undefined ? positionOf(cursor) : undefined;
+      const flipped = sort === 'asc' ? 'desc' : 'asc';
+      const rows = await seek(principal.partition, {
+        limit: query.size + 1,
+        order: backward ? flipped : sort,
+        ...(from !== undefined ? { from } : {}),
+        ...(query.filters !== undefined ? { filters: query.filters } : {}),
+      });
+      const more = rows.length > query.size;
+      const data = rows.slice(0, query.size);
+      if (backward) data.reverse();
+      // Going forward, a cursor means there is a page behind; going backward, the cursor's own
+      // row is ahead. The extra row answers the direction we walked.
+      const hasNext = backward ? true : more;
+      const hasPrev = backward ? more : from !== undefined;
+      const first = data[0];
+      const last = data.at(-1);
+      return {
+        result: {
+          data,
+          meta: {
+            nextCursor: hasNext && last !== undefined ? cursorOf(last) : null,
+            prevCursor: hasPrev && first !== undefined ? cursorOf(first) : null,
+            hasNext: hasNext && last !== undefined,
+            hasPrev: hasPrev && first !== undefined,
+          },
+        },
+      };
+    });
   }
 
   async overview(principal: CryptoPrincipal): Promise<CryptoOverview> {

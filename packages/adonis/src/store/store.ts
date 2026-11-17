@@ -51,6 +51,27 @@ export interface AuditPageQuery {
   filters?: AuditFilters;
 }
 
+/** A position in the audit trail: the `(at, id)` of one row. */
+export interface AuditPosition {
+  at: string;
+  id: string;
+}
+
+/**
+ * One keyset read of the audit trail: rows strictly past `from` in `order`, ordered by
+ * `(at, id)` in that direction. The service asks for one row more than the page so it knows
+ * whether another page follows, and builds the opaque cursors itself.
+ */
+export interface AuditSeekQuery {
+  /** Rows to return at most. */
+  limit: number;
+  /** `desc`: rows before `from` (older first); `asc`: rows after it. */
+  order: 'asc' | 'desc';
+  /** Absent on the first page. */
+  from?: AuditPosition;
+  filters?: AuditFilters;
+}
+
 export interface AuditCounts {
   operations: number;
   denied: number;
@@ -102,7 +123,13 @@ export interface CryptoStore {
   /** Marks the key deleted and destroys every version's material. */
   deleteKey(partition: string, name: string, at: string, by: string): Promise<void>;
   appendAudit(record: CryptoAuditRecord): Promise<void>;
+  /** Offset page with an exact total. Kept for `?page=` clients; the console uses {@link seekAudit}. */
   listAudit(partition: string, query: AuditPageQuery): Promise<OffsetPage<CryptoAuditRecord>>;
+  /**
+   * Keyset read for cursor paging: no count, no offset. Optional for third-party stores: without
+   * it a cursor request answers `unsupported` and `?page=` keeps working.
+   */
+  seekAudit?(partition: string, query: AuditSeekQuery): Promise<CryptoAuditRecord[]>;
   /** Counters for the console's overview, from `since` (inclusive). */
   auditCounts(partition: string, since: string): Promise<AuditCounts>;
 }

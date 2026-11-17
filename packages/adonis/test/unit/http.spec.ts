@@ -183,6 +183,41 @@ describe('HTTP API', () => {
     expect((await audit.json()).data[0]).toMatchObject({ operation: 'encrypt', result: 'ok' });
   });
 
+  it('pages the audit by cursor with after/first, and keeps ?page= on the offset envelope', async () => {
+    const { base } = await start();
+    await post(base, '/_crypto/v1/keys', { name: 'orders', type: 'aes256-gcm' });
+    for (let n = 0; n < 4; n++) {
+      await post(base, '/_crypto/v1/encrypt', { key: 'orders', plaintext: `p${n}` });
+    }
+    const first = await fetch(`${base}/_crypto/v1/audit?first=3&filter[operation]=encrypt`, {
+      headers: auth(),
+    });
+    const one = (await first.json()) as {
+      data: Array<{ id: string }>;
+      meta: { nextCursor: string; hasNext: boolean; hasPrev: boolean; total?: number };
+    };
+    expect(one.data).toHaveLength(3);
+    expect(one.meta).toMatchObject({ hasNext: true, hasPrev: false });
+    expect(one.meta.total).toBeUndefined();
+    const second = await fetch(
+      `${base}/_crypto/v1/audit?first=3&filter[operation]=encrypt&after=${one.meta.nextCursor}`,
+      { headers: auth() },
+    );
+    const two = (await second.json()) as { data: Array<{ id: string }>; meta: object };
+    expect(two.data).toHaveLength(1);
+    expect(two.meta).toMatchObject({ hasNext: false, hasPrev: true, nextCursor: null });
+    expect(new Set([...one.data, ...two.data].map((row) => row.id)).size).toBe(4);
+
+    const bad = await fetch(`${base}/_crypto/v1/audit?after=garbage`, { headers: auth() });
+    expect(bad.status).toBe(400);
+    expect(await bad.json()).toMatchObject({ code: 'invalid' });
+
+    const legacy = await fetch(`${base}/_crypto/v1/audit?page=1&size=2&filter[operation]=encrypt`, {
+      headers: auth(),
+    });
+    expect((await legacy.json()).meta).toMatchObject({ total: 4, currentPage: 1, lastPage: 2 });
+  });
+
   it('serves sign/verify and the public key of an asymmetric key', async () => {
     const { base } = await start();
     await post(base, '/_crypto/v1/keys', { name: 'webhook', type: 'ed25519' });

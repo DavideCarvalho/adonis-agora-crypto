@@ -176,6 +176,21 @@ describe('remote path (authkit issuer, real authkit-client helpers)', () => {
     const audit = await client.audit({ size: 50, key: 'orders' });
     expect(audit.data.some((row) => row.operation === 'encrypt')).toBe(true);
     expect(audit.meta.total).toBeGreaterThan(0);
+    const firstPage = await client.auditCursor({ size: 1, key: 'orders' });
+    expect(firstPage.data).toHaveLength(1);
+    expect(firstPage.meta.hasNext).toBe(true);
+    const nextPage = await client.auditCursor({
+      size: 1,
+      key: 'orders',
+      after: firstPage.meta.nextCursor ?? '',
+    });
+    expect(nextPage.data[0]?.id).not.toBe(firstPage.data[0]?.id);
+    const backPage = await client.auditCursor({
+      size: 1,
+      key: 'orders',
+      before: nextPage.meta.prevCursor ?? '',
+    });
+    expect(backPage.data[0]?.id).toBe(firstPage.data[0]?.id);
 
     const exported = await client.exportKey('orders');
     expect(exported.material).toBeTypeOf('string');

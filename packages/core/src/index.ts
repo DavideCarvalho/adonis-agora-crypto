@@ -425,6 +425,23 @@ export interface OffsetPage<T> {
   meta: OffsetMeta;
 }
 
+/** The `meta` of a cursor page. A cursor is `null` when there is no page in that direction. */
+export interface CursorMeta {
+  nextCursor: string | null;
+  prevCursor: string | null;
+  hasNext: boolean;
+  hasPrev: boolean;
+}
+
+/**
+ * A page in the Agora cursor list wire format: no total, opaque cursors. Hand `nextCursor` back as
+ * `after` (or `prevCursor` as `before`).
+ */
+export interface CursorPage<T> {
+  data: T[];
+  meta: CursorMeta;
+}
+
 /** The console's overview counters. */
 export interface CryptoOverview {
   partition: string;
@@ -444,6 +461,7 @@ export interface CryptoOverview {
 /* They depend on `fetch`/`Buffer` only, never on `@adonisjs/core`.                                 */
 /* ------------------------------------------------------------------------------------------------ */
 export {
+  type AuditCursorListQuery,
   type AuditListQuery,
   CryptoClient,
   CryptoClientError,

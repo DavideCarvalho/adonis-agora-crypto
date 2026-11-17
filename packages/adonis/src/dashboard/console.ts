@@ -9,7 +9,7 @@ import {
 import { InvalidColumnFilterError } from '@adonis-agora/filter';
 import type { HttpContext } from '@adonisjs/core/http';
 import type { CryptoPrincipal, CryptoService } from '../crypto/service.js';
-import { parseListQuery } from '../http/list.js';
+import { parseAuditRequest, parseListQuery } from '../http/list.js';
 import { resolveAccessDeniedPage } from './access_denied_page.js';
 import { type ConsoleActor, consoleActor } from './actor.js';
 import {
@@ -437,26 +437,11 @@ export class CryptoConsole {
 
   async audit(ctx: HttpContext) {
     const principal = await this.#principal(ctx);
-    const list = parseListQuery(ctx.request.qs() as Record<string, unknown>, {
-      sortable: ['at'],
-      defaultSort: { field: 'at', direction: 'desc' },
-      filterable: ['key', 'operation', 'result', 'actor'],
-      defaultSize: 50,
-      maxSize: 200,
-    });
-    const filters = list.filters;
+    const request = parseAuditRequest(ctx.request.qs() as Record<string, unknown>);
     return ctx.response.json(
-      await this.options.service.audit(principal, {
-        page: list.page,
-        size: list.size,
-        sort: list.sort.direction,
-        filters: {
-          ...(typeof filters.key === 'string' ? { key: filters.key } : {}),
-          ...(typeof filters.operation === 'string' ? { operation: filters.operation } : {}),
-          ...(typeof filters.result === 'string' ? { result: filters.result } : {}),
-          ...(typeof filters.actor === 'string' ? { actor: filters.actor } : {}),
-        },
-      }),
+      request.cursor
+        ? await this.options.service.auditCursor(principal, request)
+        : await this.options.service.audit(principal, request),
     );
   }
 

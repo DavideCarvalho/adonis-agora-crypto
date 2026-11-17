@@ -15,7 +15,7 @@ import {
   type VerifiedTenant,
 } from '../topology/verify.js';
 import { type CryptoRpc, createCryptoRpc } from '../transports/rpc.js';
-import { parseListQuery } from './list.js';
+import { parseAuditRequest, parseListQuery } from './list.js';
 
 interface RouterLike {
   get(
@@ -396,26 +396,11 @@ export class CryptoApi {
 
   async audit(ctx: HttpContext) {
     return this.#run(ctx, async (principal) => {
-      const list = parseListQuery(ctx.request.qs() as Record<string, unknown>, {
-        sortable: ['at'],
-        defaultSort: { field: 'at', direction: 'desc' },
-        filterable: ['key', 'operation', 'result', 'actor'],
-        defaultSize: 50,
-        maxSize: 200,
-      });
-      const filters = list.filters;
+      const request = parseAuditRequest(ctx.request.qs() as Record<string, unknown>);
       return ctx.response.json(
-        await this.service.audit(principal, {
-          page: list.page,
-          size: list.size,
-          sort: list.sort.direction,
-          filters: {
-            ...(typeof filters.key === 'string' ? { key: filters.key } : {}),
-            ...(typeof filters.operation === 'string' ? { operation: filters.operation } : {}),
-            ...(typeof filters.result === 'string' ? { result: filters.result } : {}),
-            ...(typeof filters.actor === 'string' ? { actor: filters.actor } : {}),
-          },
-        }),
+        request.cursor
+          ? await this.service.auditCursor(principal, request)
+          : await this.service.audit(principal, request),
       );
     });
   }
