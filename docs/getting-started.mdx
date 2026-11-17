@@ -13,6 +13,89 @@ migration for the three tables this package owns (`crypto_keys`, `crypto_key_ver
 `crypto_audit`). The provider creates them at boot too (`autoCreateSchema: true`), so a first local
 run needs no migration.
 
+It also writes `add_crypto_audit_filter_indexes`: one index per audit filter (key, operation,
+result, actor), so the console's Audit page and `GET /v1/audit` stay fast on a long trail. On
+Postgres it builds them `CONCURRENTLY`, so writes go on while it runs.
+
+## Audit indexes on an existing install
+
+Installed before these indexes existed? Run the migration once:
+
+```sh
+node ace make:migration add_crypto_audit_filter_indexes
+```
+
+```ts title="database/migrations/xxxx_add_crypto_audit_filter_indexes.ts"
+import { BaseSchema } from '@adonisjs/lucid/schema'
+
+/**
+ * Indexes for the console's Audit page and the tenant 'GET /v1/audit': each filter (key,
+ * operation, result, actor) seeks straight to its newest rows and pages by '(at, id)' instead of
+ * reading every row of the app. Run it once on an existing install; new rows need nothing else.
+ *
+ * On Postgres the indexes are built CONCURRENTLY (writes go on while they build, which is why this
+ * migration runs outside a transaction).
+ */
+/**
+ * The database schema the table lives in: the same value as 'schema' in the crypto store config.
+ * Leave it undefined to use the connection's current schema. On MySQL a schema is a database.
+ */
+const schema: string | undefined = undefined
+
+const INDEXES: Array<[string, string[]]> = [
+  ['crypto_audit_app_at_id_idx', ['app', 'at', 'id']],
+  ['crypto_audit_app_key_at_idx', ['app', 'key_name', 'at', 'id']],
+  ['crypto_audit_app_operation_at_idx', ['app', 'operation', 'at', 'id']],
+  ['crypto_audit_app_result_at_idx', ['app', 'result', 'at', 'id']],
+  ['crypto_audit_app_actor_at_idx', ['app', 'actor', 'at', 'id']],
+]
+
+export default class extends BaseSchema {
+  static disableTransactions = true
+
+  protected tableName = 'crypto_audit'
+
+  async up() {
+    const table = schema ? schema + '.' + this.tableName : this.tableName
+    if (this.db.dialect.name === 'postgres') {
+      this.defer(async (db) => {
+        for (const [name, columns] of INDEXES) {
+          await db.rawQuery(
+            'CREATE INDEX CONCURRENTLY IF NOT EXISTS ?? ON ?? (' + columns.map(() => '??').join(', ') + ')',
+            [name, table, ...columns]
+          )
+        }
+      })
+      return
+    }
+    this.builder().alterTable(this.tableName, (t) => {
+      for (const [name, columns] of INDEXES) t.index(columns, name)
+    })
+  }
+
+  async down() {
+    if (this.db.dialect.name === 'postgres') {
+      this.defer(async (db) => {
+        for (const [name] of INDEXES) {
+          await db.rawQuery('DROP INDEX CONCURRENTLY IF EXISTS ??', [schema ? schema + '.' + name : name])
+        }
+      })
+      return
+    }
+    this.builder().alterTable(this.tableName, (t) => {
+      for (const [name, columns] of INDEXES) t.dropIndex(columns, name)
+    })
+  }
+
+  /** The schema builder, pointed at 'schema' when it is set. */
+  private builder() {
+    return schema ? this.schema.withSchema(schema) : this.schema
+  }
+}
+```
+
+Set `schema` to the value of `schema` in `config/crypto.ts` when you use one.
+
 ## A schema of its own
 
 On Postgres (or a MySQL database), keep the crypto tables out of `public`:

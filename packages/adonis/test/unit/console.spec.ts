@@ -142,6 +142,17 @@ describe('console API', () => {
     const page = (await audit.json()) as { data: Array<{ operation: string; actor: string }> };
     expect(page.data).toHaveLength(1);
     expect(page.data[0]).toMatchObject({ operation: 'encrypt', actor: 'test' });
+
+    await crypto.service.encrypt(crypto.principal, { key: 'orders', plaintext: 'y' });
+    const cursor = await fetch(
+      `${base}/_crypto/api/audit?partition=shop&filter[operation]=encrypt&first=1`,
+    );
+    const first = (await cursor.json()) as { data: unknown[]; meta: { nextCursor: string } };
+    expect(first.data).toHaveLength(1);
+    const after = await fetch(
+      `${base}/_crypto/api/audit?partition=shop&filter[operation]=encrypt&first=1&after=${first.meta.nextCursor}`,
+    );
+    expect(await after.json()).toMatchObject({ meta: { hasNext: false, hasPrev: true } });
   });
 
   it('refuses every call when the gate says no, and audits no operation', async () => {

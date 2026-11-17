@@ -47,6 +47,19 @@ export interface Page<T> {
   meta: OffsetMeta;
 }
 
+/** The cursor envelope's `meta`: no total, opaque cursors. */
+export interface CursorMeta {
+  nextCursor: string | null;
+  prevCursor: string | null;
+  hasNext: boolean;
+  hasPrev: boolean;
+}
+
+export interface CursorPage<T> {
+  data: T[];
+  meta: CursorMeta;
+}
+
 export interface AuditRow {
   id: string;
   at: string;
@@ -206,21 +219,22 @@ export class CryptoApi {
     return this.#request('DELETE', `/keys/${encodeURIComponent(name)}?${this.#query(partition)}`);
   }
 
+  /** The audit trail by cursor: hand `meta.nextCursor` back as `after`. No total. */
   audit(
     partition: string,
     options: {
-      page?: number;
+      after?: string;
       size?: number;
       key?: string;
       operation?: string;
       result?: string;
     } = {},
-  ): Promise<Page<AuditRow>> {
+  ): Promise<CursorPage<AuditRow>> {
     return this.#request(
       'GET',
       `/audit?${this.#query(partition, {
-        page: options.page ?? 1,
-        size: options.size ?? 50,
+        first: options.size ?? 50,
+        after: options.after,
         sort: '-at',
         'filter[key]': options.key,
         'filter[operation]': options.operation,

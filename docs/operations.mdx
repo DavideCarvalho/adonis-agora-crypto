@@ -124,6 +124,18 @@ const { results } = await client.encryptBatch([
 | identity | `GET /_crypto/v1/whoami` |
 
 List endpoints follow the Agora list wire format: `page`, `size`, `sort=-createdAt`,
-`filter[operation]=encrypt`, and answer `{ data, meta }`. A refusal is `{ error, code }` with a
+`filter[operation]=encrypt`, and answer `{ data, meta }`. The audit also pages by cursor, which
+costs the same at any depth: send `first` (and `after` with the previous page's `meta.nextCursor`,
+or `before` with `meta.prevCursor`) and the answer's `meta` is `{ nextCursor, prevCursor, hasNext,
+hasPrev }`, with no total.
+
+```ts
+let page = await client.auditCursor({ size: 100, result: 'denied' })
+while (page.meta.hasNext) {
+  page = await client.auditCursor({ size: 100, result: 'denied', after: page.meta.nextCursor! })
+}
+```
+
+`client.audit({ page, size })` keeps the numbered pages and their total. A refusal is `{ error, code }` with a
 status that means something: `401` unauthenticated, `403` forbidden, `404` not found, `400` invalid,
 `409` conflict, `413` too large.

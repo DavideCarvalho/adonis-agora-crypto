@@ -8,6 +8,7 @@ import { dialectOf, jsonValue, parseJson, query, type SqlDatabase, toNumber } fr
 import {
   type AuditCounts,
   type AuditPageQuery,
+  type AuditSeekQuery,
   type CryptoKeyRecord,
   type CryptoKeyVersionRecord,
   type CryptoStore,
@@ -479,6 +480,32 @@ export class LucidStore implements CryptoStore {
         firstPage: 1,
       },
     };
+  }
+
+  async seekAudit(partition: string, query_: AuditSeekQuery): Promise<CryptoAuditRecord[]> {
+    const where = this.#auditWhere(partition, { page: 1, size: 1, filters: query_.filters ?? {} });
+    const clauses = [where.sql];
+    const bindings = [...where.bindings];
+    const op = query_.order === 'asc' ? '>' : '<';
+    if (query_.from !== undefined) {
+      if (this.dialect === 'postgres') {
+        // A row comparison is one index range on (app, at[, id]).
+        clauses.push(`(at, id) ${op} (?, ?)`);
+        bindings.push(query_.from.at, query_.from.id);
+      } else {
+        // The same predicate spelled so MySQL and SQLite still range-scan on `at`.
+        clauses.push(`at ${op}= ? AND (at ${op} ? OR id ${op} ?)`);
+        bindings.push(query_.from.at, query_.from.at, query_.from.id);
+      }
+    }
+    const order = query_.order === 'asc' ? 'ASC' : 'DESC';
+    const rows = await query<AuditRow>(
+      this.db,
+      `SELECT ${AUDIT_COLUMNS} FROM crypto_audit WHERE ${clauses.join(' AND ')}
+       ORDER BY at ${order}, id ${order} LIMIT ?`,
+      [...bindings, query_.limit],
+    );
+    return rows.map(auditOf);
   }
 
   async auditCounts(partition: string, since: string): Promise<AuditCounts> {

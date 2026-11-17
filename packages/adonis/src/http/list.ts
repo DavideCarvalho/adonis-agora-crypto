@@ -1,5 +1,6 @@
 import {
   InvalidColumnFilterError,
+  parseCursorParams,
   parseFilterRequest,
   parsePageParams,
   type SortItem,
@@ -102,4 +103,70 @@ export function booleanFilter(value: string | string[] | undefined): boolean | u
   if (value === 'true' || value === '1') return true;
   if (value === 'false' || value === '0') return false;
   return undefined;
+}
+
+/** True when the request pages by cursor (`after`, `before`, `first` or `last`), not by `page`. */
+export function wantsCursor(query: Record<string, unknown>): boolean {
+  return ['after', 'before', 'first', 'last'].some(
+    (name) => query[name] !== undefined && query[name] !== '',
+  );
+}
+
+/** The audit list's parsed request, either paging style. */
+export type AuditRequest =
+  | {
+      cursor: false;
+      page: number;
+      size: number;
+      sort: 'asc' | 'desc';
+      filters: AuditRequestFilters;
+    }
+  | {
+      cursor: true;
+      after?: string;
+      before?: string;
+      size: number;
+      sort: 'asc' | 'desc';
+      filters: AuditRequestFilters;
+    };
+
+export interface AuditRequestFilters {
+  key?: string;
+  operation?: string;
+  result?: string;
+  actor?: string;
+}
+
+/**
+ * Parses the audit list query (tenant API and console share it). `after`/`before`/`first`/`last`
+ * page by cursor (no total); `page`/`size` keep the offset envelope for older clients.
+ */
+export function parseAuditRequest(query: Record<string, unknown>): AuditRequest {
+  const list = parseListQuery(query, {
+    sortable: ['at'],
+    defaultSort: { field: 'at', direction: 'desc' },
+    filterable: ['key', 'operation', 'result', 'actor'],
+    defaultSize: 50,
+    maxSize: 200,
+  });
+  const raw = list.filters;
+  const filters: AuditRequestFilters = {
+    ...(typeof raw.key === 'string' ? { key: raw.key } : {}),
+    ...(typeof raw.operation === 'string' ? { operation: raw.operation } : {}),
+    ...(typeof raw.result === 'string' ? { result: raw.result } : {}),
+    ...(typeof raw.actor === 'string' ? { actor: raw.actor } : {}),
+  };
+  const sort = list.sort.direction;
+  if (!wantsCursor(query)) {
+    return { cursor: false, page: list.page, size: list.size, sort, filters };
+  }
+  const cursor = parseCursorParams(query, { defaultSize: 50, maxSize: 200 });
+  return {
+    cursor: true,
+    ...(cursor.after !== undefined ? { after: cursor.after } : {}),
+    ...(cursor.before !== undefined && cursor.after === undefined ? { before: cursor.before } : {}),
+    size: cursor.size,
+    sort,
+    filters,
+  };
 }

@@ -1,8 +1,11 @@
+{{{
+  exports({ to: app.migrationsPath(`${new Date().getTime()}_create_crypto_tables.ts`) })
+}}}
 import { BaseSchema } from '@adonisjs/lucid/schema'
 
 /**
  * The three tables @adonis-agora/crypto owns. The provider creates them at boot by default
- * (`autoCreateSchema: true`); this migration is for teams that manage every table themselves.
+ * ('autoCreateSchema: true'); this migration is for teams that manage every table themselves.
  */
 export default class extends BaseSchema {
   async up() {

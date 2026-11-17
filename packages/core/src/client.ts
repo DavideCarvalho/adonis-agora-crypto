@@ -5,6 +5,7 @@ import {
   type CryptoErrorBody,
   type CryptoErrorCode,
   type CryptoKeyView,
+  type CursorPage,
   type DataKeyInput,
   type DataKeyResult,
   type DecryptInput,
@@ -77,6 +78,22 @@ export interface KeyListQuery {
 
 export interface AuditListQuery {
   page?: number;
+  size?: number;
+  /** `at`, `-at`. */
+  sort?: string;
+  key?: string;
+  operation?: string;
+  result?: string;
+  actor?: string;
+}
+
+/** {@link CryptoClient.auditCursor}: keyset paging over the audit trail, no total. */
+export interface AuditCursorListQuery {
+  /** A previous page's `meta.nextCursor`: the page after it. */
+  after?: string;
+  /** A previous page's `meta.prevCursor`: the page before it. */
+  before?: string;
+  /** Page size. Default 50, at most 200. */
   size?: number;
   /** `at`, `-at`. */
   sort?: string;
@@ -341,6 +358,29 @@ export class CryptoClient {
       `/v1/audit${this.#query({
         page: query.page ?? 1,
         size: query.size ?? 50,
+        sort: query.sort ?? '-at',
+        'filter[key]': query.key,
+        'filter[operation]': query.operation,
+        'filter[result]': query.result,
+        'filter[actor]': query.actor,
+      })}`,
+    );
+  }
+
+  /**
+   * The audit trail by cursor: cheap at any depth (no count, no offset). Walk it with
+   * `meta.nextCursor` → `after`.
+   */
+  auditCursor(query: AuditCursorListQuery = {}): Promise<CursorPage<CryptoAuditRecord>> {
+    const size = query.size ?? 50;
+    const backward = query.after === undefined && query.before !== undefined;
+    return this.#request(
+      'GET',
+      `/v1/audit${this.#query({
+        after: query.after,
+        before: backward ? query.before : undefined,
+        first: backward ? undefined : size,
+        last: backward ? size : undefined,
         sort: query.sort ?? '-at',
         'filter[key]': query.key,
         'filter[operation]': query.operation,

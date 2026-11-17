@@ -27,7 +27,7 @@ export function OverviewPage() {
   });
   const recent = useQuery({
     queryKey: ['audit', partition, 'recent'],
-    queryFn: () => api.audit(partition, { page: 1, size: 8 }),
+    queryFn: () => api.audit(partition, { size: 8 }),
   });
 
   return (

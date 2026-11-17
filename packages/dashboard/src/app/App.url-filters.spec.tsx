@@ -13,6 +13,29 @@ const META: Meta = {
   capabilityLegend: [],
 };
 
+/** Three cursor pages: `c1` → page 2, `c2` → page 3 (the last). */
+function auditPage(after: string | null) {
+  const n = after === null ? 1 : Number(after.slice(1)) + 1;
+  return {
+    data: [
+      {
+        id: `audit-${n}`,
+        at: '2026-01-01T00:00:00.000Z',
+        partition: 'shop',
+        operation: 'encrypt',
+        actor: `actor-p${n}`,
+        result: 'ok',
+      },
+    ],
+    meta: {
+      nextCursor: n < 3 ? `c${n}` : null,
+      prevCursor: n > 1 ? `p${n}` : null,
+      hasNext: n < 3,
+      hasPrev: n > 1,
+    },
+  };
+}
+
 const originalFetch = globalThis.fetch;
 let urls: string[] = [];
 
@@ -54,7 +77,7 @@ beforeEach(() => {
       : url.includes('/keys')
         ? page([key(`key-p${params.get('page')}`)], Number(params.get('page')))
         : url.includes('/audit')
-          ? page([])
+          ? auditPage(params.get('after'))
           : {};
     return new Response(JSON.stringify(body), {
       status: 200,
@@ -129,6 +152,35 @@ describe('the crypto console: view state in the URL', () => {
 
     fireEvent.change(screen.getByLabelText('app'), { target: { value: 'shop' } });
     await waitFor(() => expect(window.location.hash).toBe('#/audit?operation=decrypt'));
+  });
+
+  it('the audit walks by cursor: next pushes `after`, back pops it, a filter resets it', async () => {
+    window.history.replaceState(null, '', '/crypto#/audit');
+    renderApp();
+    await screen.findByText('actor-p1');
+    expect(lastQuery('/audit').get('after')).toBeNull();
+    expect(lastQuery('/audit').get('first')).toBe('50');
+    expect(lastQuery('/audit').get('page')).toBeNull();
+
+    fireEvent.click(screen.getByLabelText('Next page'));
+    await screen.findByText('actor-p2');
+    await waitFor(() => expect(window.location.hash).toBe('#/audit?after=c1'));
+    fireEvent.click(screen.getByLabelText('Next page'));
+    await screen.findByText('actor-p3');
+    await waitFor(() => expect(window.location.hash).toBe('#/audit?after=c1,c2'));
+    expect((screen.getByLabelText('Next page') as HTMLButtonElement).disabled).toBe(true);
+
+    act(() => window.history.back());
+    await screen.findByText('actor-p2');
+    fireEvent.click(screen.getByLabelText('Previous page'));
+    await screen.findByText('actor-p1');
+    await waitFor(() => expect(window.location.hash).toBe('#/audit'));
+
+    fireEvent.click(screen.getByLabelText('Next page'));
+    await waitFor(() => expect(window.location.hash).toBe('#/audit?after=c1'));
+    fireEvent.change(screen.getByLabelText('Result'), { target: { value: 'denied' } });
+    await waitFor(() => expect(window.location.hash).toBe('#/audit?result=denied'));
+    expect(lastQuery('/audit').get('after')).toBeNull();
   });
 
   it('an old `#/keys?key=<name>` link still opens that key', async () => {

@@ -70,6 +70,7 @@ export {
   KEY_MATERIAL_PURPOSE,
 } from './crypto/keyring.js';
 export {
+  type AuditCursorQuery,
   type CryptoPrincipal,
   CryptoService,
   type CryptoServiceOptions,
@@ -158,6 +159,8 @@ export type {
   AuditCounts,
   AuditFilters,
   AuditPageQuery,
+  AuditPosition,
+  AuditSeekQuery,
   CryptoKeyRecord,
   CryptoKeyVersionRecord,
   CryptoStore,

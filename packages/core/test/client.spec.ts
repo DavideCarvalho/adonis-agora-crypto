@@ -203,6 +203,17 @@ describe('CryptoClient', () => {
     expect(auditQuery?.get('filter[key]')).toBe('pii');
     expect(auditQuery?.get('filter[operation]')).toBe('decrypt');
     expect(auditQuery?.get('filter[result]')).toBe('denied');
+    await api.auditCursor({ after: 'c1', size: 20, result: 'denied' });
+    const forward = received.at(-1)?.query;
+    expect(forward?.get('after')).toBe('c1');
+    expect(forward?.get('first')).toBe('20');
+    expect(forward?.get('page')).toBeNull();
+    expect(forward?.get('filter[result]')).toBe('denied');
+    await api.auditCursor({ before: 'c0' });
+    const backward = received.at(-1)?.query;
+    expect(backward?.get('before')).toBe('c0');
+    expect(backward?.get('last')).toBe('50');
+    expect(backward?.get('first')).toBeNull();
     expect(await api.whoami()).toMatchObject({ partition: 'shop' });
   });
 
