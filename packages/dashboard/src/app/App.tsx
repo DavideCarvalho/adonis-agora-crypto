@@ -4,6 +4,7 @@ import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react
 import {
   ActivityIcon,
   AppShell,
+  ComboSelect,
   DocumentIcon,
   ErrorBoundary,
   NuqsHashAdapter,
@@ -99,32 +100,33 @@ function LogoMark() {
   );
 }
 
-function Select({
-  label,
+/** The topbar's app picker: a select with autocomplete over `/meta`'s apps. */
+function AppPicker({
   value,
   options,
   onChange,
 }: {
-  label: string;
   value: string;
   options: readonly string[];
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.08em] text-faint">
-      {label}
-      <select
-        aria-label={label}
-        className="h-7 rounded-md border border-border bg-panel-2 px-1.5 text-[11.5px] font-normal normal-case tracking-normal text-dim"
+    <label
+      htmlFor="crypto-app-picker"
+      className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.08em] text-faint"
+    >
+      app
+      <ComboSelect
+        id="crypto-app-picker"
+        aria-label="app"
+        className="h-7 w-40 font-normal normal-case tracking-normal text-[11.5px]"
+        options={options}
         value={value}
-        onChange={(event) => onChange(event.target.value)}
-      >
-        {options.map((option) => (
-          <option key={option} value={option}>
-            {option}
-          </option>
-        ))}
-      </select>
+        clearable={false}
+        onValueChange={(next) => {
+          if (next !== null && next !== value) onChange(next);
+        }}
+      />
     </label>
   );
 }
@@ -269,8 +271,7 @@ function Console() {
         shell={shell}
         title={TITLES[route.page]}
         actions={
-          <Select
-            label="app"
+          <AppPicker
             value={partition}
             options={apps}
             onChange={(next) => {

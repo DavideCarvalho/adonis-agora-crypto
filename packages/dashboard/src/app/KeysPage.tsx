@@ -48,7 +48,9 @@ export const keysParams = {
 };
 
 export function KeysPage({ onOpen }: { onOpen: (name: string) => void }) {
-  const { api, partition } = useConsole();
+  const { api, meta, partition } = useConsole();
+  // The server's key types (`/meta`), else the four this console knows.
+  const types = meta.keyTypes.length > 0 ? meta.keyTypes : TYPES;
   const client = useQueryClient();
   // `#/keys?q=billing&page=2`: typing replaces the history entry (and goes back to page 1), a page
   // pick adds one. `key` is taken: it names the open key (`#/keys?key=<name>`).
@@ -56,6 +58,8 @@ export function KeysPage({ onOpen }: { onOpen: (name: string) => void }) {
   const setPage = (next: number) => void setView({ page: next });
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState<Form>(emptyForm);
+  // The form's type, kept to one the list offers.
+  const formType = types.includes(form.type) ? form.type : (types[0] ?? form.type);
   const [deleting, setDeleting] = useState<Key | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -74,7 +78,7 @@ export function KeysPage({ onOpen }: { onOpen: (name: string) => void }) {
     mutationFn: () =>
       api.createKey(partition, {
         name: form.name.trim(),
-        type: form.type,
+        type: formType,
         ...(form.description.trim() ? { description: form.description.trim() } : {}),
         ...(form.deletionAllowed ? { deletionAllowed: true } : {}),
         ...(form.exportable ? { exportable: true } : {}),
@@ -307,10 +311,10 @@ export function KeysPage({ onOpen }: { onOpen: (name: string) => void }) {
             <select
               id="crypto-key-type"
               className="h-8 rounded-md border border-border bg-panel-2 px-2 text-[11.5px] text-dim"
-              value={form.type}
+              value={formType}
               onChange={(event) => setForm({ ...form, type: event.target.value as KeyType })}
             >
-              {TYPES.map((type) => (
+              {types.map((type) => (
                 <option key={type} value={type}>
                   {type}
                 </option>

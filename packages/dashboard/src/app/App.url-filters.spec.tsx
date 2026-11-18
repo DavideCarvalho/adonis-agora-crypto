@@ -12,6 +12,7 @@ const META: Meta = {
   keyTypes: [],
   capabilityLegend: [],
 };
+let meta: Meta = META;
 
 /** Three cursor pages: `c1` → page 2, `c2` → page 3 (the last). */
 function auditPage(after: string | null) {
@@ -63,6 +64,7 @@ function page<T>(data: T[], currentPage = 1, lastPage = 3) {
 
 beforeEach(() => {
   urls = [];
+  meta = META;
   const data = document.createElement('script');
   data.id = 'crypto-dashboard-config';
   data.type = 'application/json';
@@ -73,7 +75,7 @@ beforeEach(() => {
     urls.push(url);
     const params = new URL(url, 'http://x').searchParams;
     const body = url.includes('/meta')
-      ? META
+      ? meta
       : url.includes('/keys')
         ? page([key(`key-p${params.get('page')}`)], Number(params.get('page')))
         : url.includes('/audit')
@@ -100,6 +102,22 @@ function renderApp() {
   );
 }
 
+/** Opens a kit combobox (Base UI opens on ArrowDown in jsdom), types, and picks an option. */
+async function pickCombo(label: string, text: string, option: string | RegExp = text) {
+  const input = screen.getByRole('combobox', { name: label });
+  await act(async () => {
+    input.focus();
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.change(input, { target: { value: text } });
+    await new Promise((r) => setTimeout(r, 20));
+  });
+  const item = await screen.findByRole('option', { name: option });
+  await act(async () => {
+    fireEvent.click(item);
+    await new Promise((r) => setTimeout(r, 20));
+  });
+}
+
 const lastQuery = (path: string) =>
   new URL(urls.filter((u) => u.includes(path)).at(-1) ?? '/', 'http://x').searchParams;
 
@@ -112,7 +130,9 @@ describe('the crypto console: view state in the URL', () => {
     expect(query.get('partition')).toBe('billing');
     expect(query.get('search')).toBe('pay');
     expect(query.get('page')).toBe('2');
-    expect((screen.getByLabelText('app') as HTMLSelectElement).value).toBe('billing');
+    expect((screen.getByRole('combobox', { name: 'app' }) as HTMLInputElement).value).toBe(
+      'billing',
+    );
     expect((screen.getByLabelText('Search keys') as HTMLInputElement).value).toBe('pay');
   });
 
@@ -139,18 +159,19 @@ describe('the crypto console: view state in the URL', () => {
     window.history.replaceState(null, '', '/crypto#/keys');
     renderApp();
     await screen.findByText('key-p1');
-    fireEvent.change(screen.getByLabelText('app'), { target: { value: 'billing' } });
+    await pickCombo('app', 'bil', 'billing');
     await waitFor(() => expect(window.location.hash).toBe('#/keys?app=billing'));
     await waitFor(() => expect(lastQuery('/keys').get('partition')).toBe('billing'));
 
     fireEvent.click(screen.getByRole('link', { name: 'Audit' }));
     await waitFor(() => expect(window.location.hash).toBe('#/audit?app=billing'));
-    fireEvent.change(await screen.findByLabelText('Operation'), { target: { value: 'decrypt' } });
+    await screen.findByRole('combobox', { name: 'Operation' });
+    await pickCombo('Operation', 'decr', 'decrypt');
     await waitFor(() => expect(window.location.hash).toBe('#/audit?app=billing&operation=decrypt'));
     await waitFor(() => expect(lastQuery('/audit').get('filter[operation]')).toBe('decrypt'));
     expect(lastQuery('/audit').get('partition')).toBe('billing');
 
-    fireEvent.change(screen.getByLabelText('app'), { target: { value: 'shop' } });
+    await pickCombo('app', 'sho', 'shop');
     await waitFor(() => expect(window.location.hash).toBe('#/audit?operation=decrypt'));
   });
 
@@ -181,6 +202,31 @@ describe('the crypto console: view state in the URL', () => {
     fireEvent.change(screen.getByLabelText('Result'), { target: { value: 'denied' } });
     await waitFor(() => expect(window.location.hash).toBe('#/audit?result=denied'));
     expect(lastQuery('/audit').get('after')).toBeNull();
+  });
+
+  it("the key filter offers the app's keys, searched server-side, and takes a typed name", async () => {
+    window.history.replaceState(null, '', '/crypto#/audit');
+    renderApp();
+    await screen.findByText('actor-p1');
+    await pickCombo('Filter by key', 'key', 'key-p1');
+    await waitFor(() => expect(window.location.hash).toBe('#/audit?key=key-p1'));
+    await waitFor(() => expect(lastQuery('/audit').get('filter[key]')).toBe('key-p1'));
+    expect(lastQuery('/keys').get('partition')).toBe('shop');
+
+    await pickCombo('Filter by key', 'orders', 'Use “orders”');
+    await waitFor(() => expect(window.location.hash).toBe('#/audit?key=orders'));
+    await waitFor(() => expect(lastQuery('/audit').get('filter[key]')).toBe('orders'));
+    expect(lastQuery('/keys').get('search')).toBe('orders');
+  });
+
+  it('the key type select lists the types `/meta` names', async () => {
+    meta = { ...META, keyTypes: ['ed25519', 'x25519'] };
+    window.history.replaceState(null, '', '/crypto#/keys');
+    renderApp();
+    await screen.findByText('key-p1');
+    fireEvent.click(screen.getAllByRole('button', { name: 'New key' })[0]!);
+    const select = (await screen.findByLabelText('Type')) as HTMLSelectElement;
+    expect([...select.options].map((o) => o.value)).toEqual(['ed25519', 'x25519']);
   });
 
   it('an old `#/keys?key=<name>` link still opens that key', async () => {
