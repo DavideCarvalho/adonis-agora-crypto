@@ -89,3 +89,13 @@ describe('errors', () => {
     expect(statusForErrorCode('unreadable')).toBe(500);
   });
 });
+
+describe('capabilityAllows: a `*` before the last one consumes a segment', () => {
+  it('does not let a non-trailing `*` run past the end of the required capability', () => {
+    expect(capabilityAllows(['crypto:*:*'], 'crypto')).toBe(false);
+    expect(capabilityAllows(['crypto:*:*:*'], 'crypto:a')).toBe(false);
+    expect(capabilityAllows(['crypto:*:*'], 'crypto:a')).toBe(true);
+    expect(capabilityAllows(['crypto:*:*'], 'crypto:a:b')).toBe(true);
+    expect(capabilityAllows(['crypto:*'], 'crypto')).toBe(true);
+  });
+});
