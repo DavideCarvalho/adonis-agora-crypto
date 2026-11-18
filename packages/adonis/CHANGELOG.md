@@ -1,5 +1,11 @@
 # @adonis-agora/crypto
 
+## 0.12.4
+
+### Patch Changes
+
+- [#33](https://github.com/DavideCarvalho/adonis-agora-crypto/pull/33) [`686b789`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/686b789d10ce76c5615736ee6fdbb4ada8d33a13) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Console: creatable comboboxes keep the typed text when you leave the field, and server-side suggestions no longer wipe what you are typing.
+
 ## 0.12.3
 
 ### Patch Changes
