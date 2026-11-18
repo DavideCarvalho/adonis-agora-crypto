@@ -1,5 +1,11 @@
 # @adonis-agora/crypto-dashboard
 
+## 0.3.1
+
+### Patch Changes
+
+- [#30](https://github.com/DavideCarvalho/adonis-agora-crypto/pull/30) [`6239c79`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/6239c79341ffb97cddf3cc171e260144d43372e1) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Console ⌘K: arrow keys now visibly move the selection. The highlighted item was styled with a bare `data-selected:` (cmdk marks every item `true` or `false`) and with the dialog's own surface color, so moving looked like nothing happened.
+
 ## 0.3.0
 
 ### Minor Changes
