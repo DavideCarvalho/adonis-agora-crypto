@@ -1,5 +1,11 @@
 # @adonis-agora/crypto-core
 
+## 0.7.1
+
+### Patch Changes
+
+- [#31](https://github.com/DavideCarvalho/adonis-agora-crypto/pull/31) [`dba00e2`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/dba00e2daf27ebac2f66fa62c2eb8a1b9c6befa1) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `capabilityAllows`: a `*` before the last one now needs a segment to consume, so `crypto:*:*` no longer matches `crypto`. Only the last `*` may match nothing. The other Agora libs use the same rule.
+
 ## 0.7.0
 
 ### Minor Changes
