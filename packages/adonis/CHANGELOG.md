@@ -1,5 +1,11 @@
 # @adonis-agora/crypto
 
+## 0.12.3
+
+### Patch Changes
+
+- [#32](https://github.com/DavideCarvalho/adonis-agora-crypto/pull/32) [`eac3997`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/eac3997f7054d7c0e3399dbaf232a790338dd906) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Console pickers with autocomplete (the kit's new `ComboSelect`): the topbar app picker, and the Audit page's key and operation filters. The key filter offers the app's keys (searched on the server as you type) and still takes any typed name. The New key dialog lists the key types the server reports in `/meta`.
+
 ## 0.12.2
 
 ### Patch Changes
