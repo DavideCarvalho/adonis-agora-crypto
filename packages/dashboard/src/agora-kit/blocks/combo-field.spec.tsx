@@ -6,18 +6,17 @@ import { ComboMultiSelect, ComboSelect, comboItems, comboMatches } from './combo
 
 afterEach(cleanup);
 
-const queues = [
-  { value: 'default', label: 'Default' },
-  { value: 'emails', label: 'E-mails', hint: '12 jobs' },
-  { value: 'relatorios', label: 'Relatórios' },
-];
+const defaultQueue = { value: 'default', label: 'Default' };
+const emailsQueue = { value: 'emails', label: 'E-mails', hint: '12 jobs' };
+const reportsQueue = { value: 'relatorios', label: 'Relatórios' };
+const queues = [defaultQueue, emailsQueue, reportsQueue];
 
 describe('comboMatches / comboItems', () => {
   it('matches label, value and hint, ignoring accents and case', () => {
-    expect(comboMatches(queues[2], 'RELATORIO')).toBe(true);
-    expect(comboMatches(queues[1], '12')).toBe(true);
-    expect(comboMatches(queues[1], 'mails jobs')).toBe(true);
-    expect(comboMatches(queues[0], 'mail')).toBe(false);
+    expect(comboMatches(reportsQueue, 'RELATORIO')).toBe(true);
+    expect(comboMatches(emailsQueue, '12')).toBe(true);
+    expect(comboMatches(emailsQueue, 'mails jobs')).toBe(true);
+    expect(comboMatches(defaultQueue, 'mail')).toBe(false);
   });
 
   it('keeps selected values outside the list and offers typed text when creatable', () => {
