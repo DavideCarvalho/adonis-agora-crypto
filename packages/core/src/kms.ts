@@ -49,7 +49,7 @@ const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64url');
 export function cryptoServerKms(options: CryptoServerKmsOptions): KmsAdapterLike {
   const bindPurpose = options.bindPurpose ?? true;
   const aadOf = (context: KmsContextLike) => (bindPurpose ? `kms:${context.purpose}` : 'kms');
-  return {
+  const adapter: KmsAdapterLike = {
     async wrap(dataKey, context) {
       const { ciphertext } = await options.client.encrypt({
         key: options.key,
@@ -67,4 +67,16 @@ export function cryptoServerKms(options: CryptoServerKmsOptions): KmsAdapterLike
       return Buffer.from(plaintext, 'base64url');
     },
   };
+  // Telescope's Architecture page (`config: root key → kms agora-crypto`): the lib using this
+  // adapter carries it in its config. The key name is not a secret; the client's URL stays out.
+  try {
+    Object.defineProperty(adapter, Symbol.for('@adonis-agora/stack'), {
+      value: [{ tech: 'kms', label: 'agora-crypto', purpose: 'root key' }],
+      enumerable: false,
+      configurable: true,
+    });
+  } catch {
+    // nothing to describe
+  }
+  return adapter;
 }

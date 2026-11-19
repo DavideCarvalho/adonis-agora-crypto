@@ -293,6 +293,21 @@ describe('CryptoClient', () => {
 });
 
 describe('cryptoServerKms', () => {
+  it('describes itself to telescope as the crypto server KMS, with no URL', () => {
+    const adapter = cryptoServerKms({
+      client: createCryptoClient({
+        url: 'https://crypto.example.com/_crypto',
+        partition: 'app',
+        token: 't',
+      }),
+      key: 'config-root',
+    });
+    expect(
+      (adapter as unknown as Record<symbol, unknown>)[Symbol.for('@adonis-agora/stack')],
+    ).toEqual([{ tech: 'kms', label: 'agora-crypto', purpose: 'root key' }]);
+    expect(Object.keys(adapter)).toEqual(['wrap', 'unwrap']);
+  });
+
   it('wraps and unwraps a data key through the server, bound to the purpose', async () => {
     const { url, received } = await fakeServer({
       'POST /_crypto/v1/encrypt': (request) => {

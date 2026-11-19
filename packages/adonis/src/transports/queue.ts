@@ -3,6 +3,7 @@ import {
   TransportError,
   type TransportReplyMessage,
 } from '@adonis-agora/crypto-core';
+import { describeStackUse, redisConnectionName, redisUse } from '../stack.js';
 import type { BrokerDriver } from './broker.js';
 import type { RedisLike } from './redis.js';
 
@@ -34,6 +35,14 @@ export interface QueueTransportOptions {
  * envelope.
  */
 export function queueTransport(options: QueueTransportOptions): BrokerDriver {
+  // An `@adonisjs/redis` connection names itself; a bare client says nothing truthful.
+  return describeStackUse(buildQueueTransport(options), () => {
+    const name = redisConnectionName(options.connection);
+    return name ? redisUse(name, 'tenant link') : undefined;
+  });
+}
+
+function buildQueueTransport(options: QueueTransportOptions): BrokerDriver {
   const prefix = options.prefix ?? 'crypto';
   const timeoutMs = options.timeoutMs ?? 10_000;
   const replyKey = (id: string) => `${prefix}:reply:${id}`;

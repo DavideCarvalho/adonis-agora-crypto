@@ -3,6 +3,7 @@ import {
   TransportError,
   type TransportReplyMessage,
 } from '@adonis-agora/crypto-core';
+import { describeStackUse, redisConnectionName, redisUse } from '../stack.js';
 import type { BrokerDriver } from './broker.js';
 
 /** The slice of BullMQ a call channel needs; the real classes are imported lazily. */
@@ -43,6 +44,14 @@ export interface BullmqTransportOptions {
 
 /** The worker's return value is the reply, so a failed job is the dead-letter (bullmq keeps it). */
 export function bullmqTransport(options: BullmqTransportOptions): BrokerDriver {
+  // An `@adonisjs/redis` connection names itself; a bare client says nothing truthful.
+  return describeStackUse(buildBullmqTransport(options), () => {
+    const name = redisConnectionName(options.connection);
+    return name ? redisUse(name, 'tenant link') : undefined;
+  });
+}
+
+function buildBullmqTransport(options: BullmqTransportOptions): BrokerDriver {
   const queueName = options.queueName ?? 'crypto-calls';
   const prefix = options.prefix ?? 'crypto';
   const timeoutMs = options.timeoutMs ?? 10_000;
