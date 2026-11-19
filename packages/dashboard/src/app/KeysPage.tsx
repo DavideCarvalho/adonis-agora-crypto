@@ -48,7 +48,7 @@ export const keysParams = {
 };
 
 export function KeysPage({ onOpen }: { onOpen: (name: string) => void }) {
-  const { api, meta, partition } = useConsole();
+  const { api, meta, partition, readOnly } = useConsole();
   // The server's key types (`/meta`), else the four this console knows.
   const types = meta.keyTypes.length > 0 ? meta.keyTypes : TYPES;
   const client = useQueryClient();
@@ -177,7 +177,8 @@ export function KeysPage({ onOpen }: { onOpen: (name: string) => void }) {
           <Button
             variant="ghost"
             size="sm"
-            disabled={key.deletedAt !== undefined || rotate.isPending}
+            disabled={key.deletedAt !== undefined || rotate.isPending || readOnly !== undefined}
+            title={readOnly}
             onClick={(event) => {
               event.stopPropagation();
               rotate.mutate(key.name);
@@ -188,7 +189,8 @@ export function KeysPage({ onOpen }: { onOpen: (name: string) => void }) {
           <Button
             variant="ghost"
             size="sm"
-            disabled={key.deletedAt !== undefined || !key.deletionAllowed}
+            disabled={key.deletedAt !== undefined || !key.deletionAllowed || readOnly !== undefined}
+            title={readOnly}
             onClick={(event) => {
               event.stopPropagation();
               setDeleting(key);
@@ -206,7 +208,15 @@ export function KeysPage({ onOpen }: { onOpen: (name: string) => void }) {
       <PageHeader
         title="Keys"
         description="Named keys of this app. Rotate adds a version; old data keeps opening until the floor moves."
-        actions={<Button onClick={() => setCreating(true)}>New key</Button>}
+        actions={
+          <Button
+            disabled={readOnly !== undefined}
+            title={readOnly}
+            onClick={() => setCreating(true)}
+          >
+            New key
+          </Button>
+        }
       />
 
       {error ? (
@@ -253,7 +263,15 @@ export function KeysPage({ onOpen }: { onOpen: (name: string) => void }) {
                   : 'Create the first key: encrypt, sign and hmac live here.'
               }
               action={
-                search ? undefined : <Button onClick={() => setCreating(true)}>New key</Button>
+                search ? undefined : (
+                  <Button
+                    disabled={readOnly !== undefined}
+                    title={readOnly}
+                    onClick={() => setCreating(true)}
+                  >
+                    New key
+                  </Button>
+                )
               }
             />
           }

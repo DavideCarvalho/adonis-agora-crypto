@@ -28,6 +28,16 @@ import {
 import { registerCryptoDevTools } from '../src/dev_tools.js';
 import { registerDoctorChecks } from '../src/doctor/agora_doctor.js';
 import { agoraDoctorChecks } from '../src/doctor/checks.js';
+import {
+  cryptoConsoleCommandHandler,
+  FederatedCryptoApps,
+  validateFederatedCryptoApp,
+} from '../src/federation/console.js';
+import {
+  RedisConsoleChannel,
+  redisConnectionsOf,
+  resolveRedisConnection,
+} from '../src/federation/redis_channel.js';
 import { CryptoApi } from '../src/http/api.js';
 import { serviceCipher } from '../src/http/envelope.js';
 import { envelopeSkipPaths } from '../src/http/envelope_global.js';
@@ -69,6 +79,10 @@ export default class CryptoProvider {
   #runtime: CryptoRuntime | undefined;
   #building: Promise<CryptoRuntime> | undefined;
   #consoleConfig: ResolvedConsoleConfig | undefined;
+  /** The other apps the console shows (`console.federatedApps`). */
+  #federated: FederatedCryptoApps | undefined;
+  /** The channel this app answers other consoles on (`consoleCommands`). */
+  #consoleChannel: RedisConsoleChannel | undefined;
 
   constructor(protected app: ApplicationService) {}
 
@@ -361,6 +375,25 @@ export default class CryptoProvider {
     const service = this.#runtime?.service;
     if (!config?.enabled || !service) return;
     const registry = await readAgoraConsoles(this.app.container);
+    if (config.federatedApps) {
+      const redisConnections = redisConnectionsOf(this.app.config);
+      for (const [key, entry] of Object.entries(config.federatedApps)) {
+        validateFederatedCryptoApp(key, entry, redisConnections);
+      }
+      const container = this.app.container;
+      this.#federated = new FederatedCryptoApps(config.federatedApps, {
+        async db(connection) {
+          if (!container.hasBinding('lucid.db')) {
+            throw new Error('the federated console reads other apps through @adonisjs/lucid');
+          }
+          const db = (await container.make('lucid.db')) as unknown as {
+            connection(name?: string): SqlDatabase;
+          };
+          return db.connection(connection);
+        },
+        redis: (connection) => resolveRedisConnection(container, connection),
+      });
+    }
     const console = new CryptoConsole({
       service,
       config,
@@ -370,6 +403,7 @@ export default class CryptoProvider {
       ...(registry ? { registry } : {}),
       topology: this.#runtime?.topology === 'standalone' ? 'standalone' : 'control-plane',
       logger,
+      ...(this.#federated ? { federated: this.#federated } : {}),
     });
     if (!config.authorize) {
       logger.warn(
@@ -529,7 +563,54 @@ export default class CryptoProvider {
     return serviceCipher(runtime.service, partition, 'envelope');
   }
 
+  /**
+   * Answer another app's federated crypto console (`consoleCommands` in config/crypto.ts). Web
+   * processes only: a short-lived `ace` command that won a command's claim could exit before it
+   * answers. A connection that cannot claim a command (no `SET NX`) answers nothing, and says so.
+   */
+  async ready(): Promise<void> {
+    const config = this.app.config.get<CryptoConfig | undefined>('crypto');
+    if (!config || config.topology === 'tenant') return;
+    const options = config.consoleCommands;
+    if (!options || this.app.getEnvironment() !== 'web') return;
+    const logger = await this.#logger();
+    const service = this.#runtime?.service;
+    if (!service) return;
+    try {
+      const partitions =
+        options.partitions ?? (this.#runtime?.partition ? [this.#runtime.partition] : undefined);
+      const channel = new RedisConsoleChannel({
+        client: await resolveRedisConnection(this.app.container, options.connection),
+        prefix: options.prefix,
+      });
+      await channel.answer(
+        cryptoConsoleCommandHandler({
+          service,
+          actions: options.actions === true,
+          ...(options.capabilities ? { capabilities: options.capabilities } : {}),
+          ...(partitions ? { partitions } : {}),
+          log: (line) => logger.info(line),
+        }),
+        {
+          onError: (error) =>
+            logger.warn(
+              `[@adonis-agora/crypto] federated console command failed: ${error instanceof Error ? error.message : String(error)}`,
+            ),
+        },
+      );
+      this.#consoleChannel = channel;
+    } catch (error) {
+      logger.warn(
+        `[@adonis-agora/crypto] consoleCommands is on, but ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
   async shutdown(): Promise<void> {
+    await this.#consoleChannel?.close();
+    this.#consoleChannel = undefined;
+    await this.#federated?.close();
+    this.#federated = undefined;
     await this.#runtime?.stopTransport?.().catch(() => {});
     this.#runtime?.subjects?.clear();
     setRuntime(undefined);

@@ -1,0 +1,158 @@
+---
+title: Federated console
+description: Show and manage the keys of an app that runs crypto standalone from another app's console, without its key material ever leaving it.
+icon: Share2
+---
+
+An app can keep its keys **standalone** (its own store, its own root key, no runtime dependency on
+any other app) and still appear in another app's console, next to that console's own apps.
+Typically the Hub's console lists its control-plane partitions and, in the same App picker, the
+apps that hold their own keys.
+
+Two sides take part:
+
+- **the console app** (the Hub) names the other apps in `console.federatedApps`;
+- **each owning app** answers that console with `consoleCommands`.
+
+## The console app
+
+```ts title="config/crypto.ts"
+import { defineConfig } from '@adonis-agora/crypto'
+import { authkitDashboardAuthorize } from '@adonis-agora/authkit-client'
+
+export default defineConfig({
+  topology: 'control-plane',
+  verifyTenant,
+  console: {
+    appLabel: 'Hub',
+    authorize: authkitDashboardAuthorize({ role: 'ADMIN' }),
+    federatedApps: {
+      'entre-textos': {
+        label: 'Entre Textos',
+        // The app's `app` in its own config/crypto.ts. Default: the key.
+        partition: 'entre-textos',
+        // A connection in THIS app's config/database.ts that reaches its tables.
+        store: { connection: 'entretextos', schema: 'public' },
+        // A connection in THIS app's config/redis.ts, and the app's consoleCommands.prefix.
+        controlPlane: { connection: 'main', prefix: 'entretextos' },
+        // actions: false,   // browse only from here
+        // timeoutMs: 15_000,
+      },
+    },
+  },
+})
+```
+
+The key (`entre-textos`) is what the App picker selects (`?app=` in the page, `?partition=` on the
+API). Pick it and the console shows that app's keys, versions, overview and audit, with a
+**federated** badge and a note saying where the data comes from.
+
+The console reads the other app's key metadata and audit trail, and **never the key material**.
+Grant exactly that, leaving the `material` column out:
+
+```sql
+GRANT USAGE ON SCHEMA public TO hub;
+GRANT SELECT ON public.crypto_keys, public.crypto_audit TO hub;
+GRANT SELECT (app, name, version, kid, public_key, created_at, created_by)
+  ON public.crypto_key_versions TO hub;
+```
+
+### Who sees and does what
+
+`authorize` decides, with the same `apps` grant as every Agora console: a viewer sees the federated
+apps the grant names (`'*'` or no `apps`: all of them). Its optional `capabilities` narrow what that
+viewer may ask the other app to do:
+
+```ts title="config/crypto.ts"
+console: {
+  authorize: async (ctx) => {
+    const user = ctx.auth.user
+    if (!user?.isAdmin) return false
+    return {
+      allowed: true,
+      apps: ['entre-textos'],
+      // Omitted: whatever the owning app allows.
+      capabilities: user.isOwner ? ['crypto:*'] : ['crypto:keys:read'],
+    }
+  },
+}
+```
+
+## The owning app
+
+```ts title="config/crypto.ts"
+import { defineConfig } from '@adonis-agora/crypto'
+
+export default defineConfig({
+  topology: 'standalone',
+  app: 'entre-textos',
+  consoleCommands: {
+    connection: 'main',
+    prefix: 'entretextos',
+    actions: true,
+    // capabilities: ['crypto:keys:read', 'crypto:keys:manage'],
+  },
+})
+```
+
+It needs `@adonisjs/redis`. Every web instance listens; exactly one runs each command. With
+`actions` off (the default), the other console only browses.
+
+Each operation runs through this app's own crypto service: the capability check, the root key and
+the audit row are its own. The audit records the other console's viewer as the **actor** and
+`console:<appLabel>` as the **client**, so the Audit page (here and in the Hub) says who did it and
+from where. A refusal is recorded too.
+
+| From the other console | Needs |
+| --- | --- |
+| Create a key | `crypto:keys:manage` |
+| Rotate | `crypto:keys:manage` |
+| Change the policy (decryption floor, deletion, export flag, description) | `crypto:keys:manage` |
+| Delete | `crypto:keys:manage` |
+| Test (encrypt + decrypt, sign + verify, or HMAC with a random probe) | the key's operations |
+| Rewrap a ciphertext to the latest version | `crypto:rewrap:<key>` |
+| Export | never: not a command |
+
+An operation needs both: what `consoleCommands.capabilities` allows (default: manage keys, and the
+operations a test and a rewrap use) and what the console's `authorize` granted the viewer.
+
+## What crosses where
+
+| | How | What the console app gets |
+| --- | --- | --- |
+| Keys, versions, overview, audit | read from the app's tables | metadata and public keys, never `material` |
+| Every key operation | a command to the app over Redis | the key's metadata, a test's yes/no, a rewrapped ciphertext |
+
+- **Key material never leaves the app.** The console reads with no root key, never selects the
+  `material` column, and no command answers with key material, a plaintext or a probe.
+- **The app decides.** `consoleCommands.actions` and `.capabilities` are the app's; the console's
+  `actions: false` makes it read-only from there too.
+- **Down app, readable data.** When no instance of the app listens, an operation answers `503` at
+  once; reading keeps working.
+- The console's own reads of another app are not written to that app's audit trail (it only reads
+  there); every operation is.
+
+## Using it from code
+
+The console's API takes `?partition=<key>` like any other app, and the key test and rewrap are
+there for local keys too:
+
+| Route | |
+| --- | --- |
+| `GET /_crypto/api/apps` | the App picker: `{ local, apps: [{ id, label, mode, actions }], selected }` |
+| `POST /_crypto/api/keys/:name/test` | run the key once; `{ key, type, version, ok, operations }` |
+| `POST /_crypto/api/keys/:name/rewrap` | `{ ciphertext, aad? }` → the ciphertext under the latest version |
+
+Your app's own code keeps using its keys as before:
+
+```ts title="app/controllers/theses_controller.ts"
+import type { HttpContext } from '@adonisjs/core/http'
+import crypto from '@adonis-agora/crypto/services/main'
+
+export default class ThesesController {
+  async store({ request }: HttpContext) {
+    const { ciphertext } = await crypto.encrypt({ key: 'thesis', plaintext: request.input('body') })
+    return { ciphertext }
+  }
+}
+```

@@ -6,7 +6,7 @@ import { Badge } from '../agora-kit/ui/badge';
 import { Button } from '../agora-kit/ui/button';
 import { Input } from '../agora-kit/ui/input';
 import { Skeleton } from '../agora-kit/ui/skeleton';
-import type { KeyVersion } from '../client/crypto-client';
+import type { KeyTestResult, KeyVersion } from '../client/crypto-client';
 import { useConsole } from './console-context';
 import { exactTime, relativeTime, shortKid, versionTone } from './format';
 
@@ -54,9 +54,10 @@ const columns: Column<KeyVersion>[] = [
 ];
 
 export function KeyPage({ name, onBack }: { name: string; onBack: () => void }) {
-  const { api, partition } = useConsole();
+  const { api, partition, readOnly } = useConsole();
   const client = useQueryClient();
   const [error, setError] = useState<string | null>(null);
+  const [tested, setTested] = useState<KeyTestResult | null>(null);
   const [floor, setFloor] = useState<string>('');
   const [description, setDescription] = useState<string | null>(null);
 
@@ -92,6 +93,19 @@ export function KeyPage({ name, onBack }: { name: string; onBack: () => void }) 
     onError: (failure: Error) => setError(failure.message),
   });
 
+  const test = useMutation({
+    mutationFn: () => api.testKey(partition, name),
+    onSuccess: (result) => {
+      setError(null);
+      setTested(result);
+      void client.invalidateQueries({ queryKey: ['audit', partition] });
+    },
+    onError: (failure: Error) => {
+      setTested(null);
+      setError(failure.message);
+    },
+  });
+
   return (
     <>
       <PageHeader
@@ -103,7 +117,20 @@ export function KeyPage({ name, onBack }: { name: string; onBack: () => void }) 
               Back
             </Button>
             <Button
-              disabled={rotate.isPending || key.data?.deletedAt !== undefined}
+              variant="secondary"
+              disabled={
+                test.isPending || readOnly !== undefined || key.data?.deletedAt !== undefined
+              }
+              title={readOnly ?? 'Run this key once with a random probe (audited)'}
+              onClick={() => test.mutate()}
+            >
+              {test.isPending ? 'Testing…' : 'Test'}
+            </Button>
+            <Button
+              disabled={
+                rotate.isPending || readOnly !== undefined || key.data?.deletedAt !== undefined
+              }
+              title={readOnly}
               onClick={() => rotate.mutate()}
             >
               Rotate
@@ -115,6 +142,20 @@ export function KeyPage({ name, onBack }: { name: string; onBack: () => void }) 
       {error ? (
         <div className="rounded-md border border-bad/30 bg-bad/10 px-3 py-2 text-[11.5px] text-bad">
           {error}
+        </div>
+      ) : null}
+      {tested ? (
+        <div
+          role="status"
+          data-key-test={tested.ok ? 'ok' : 'failed'}
+          className={
+            tested.ok
+              ? 'rounded-md border border-good/30 bg-good/10 px-3 py-2 text-[11.5px] text-good'
+              : 'rounded-md border border-bad/30 bg-bad/10 px-3 py-2 text-[11.5px] text-bad'
+          }
+        >
+          {tested.ok ? 'Works' : 'Did not round-trip'}: {tested.operations.join(' + ')} with v
+          {tested.version}.
         </div>
       ) : null}
 
@@ -181,7 +222,7 @@ export function KeyPage({ name, onBack }: { name: string; onBack: () => void }) 
                       />
                       <Button
                         size="sm"
-                        disabled={floor.trim() === '' || policy.isPending}
+                        disabled={floor.trim() === '' || policy.isPending || readOnly !== undefined}
                         onClick={() => {
                           const value = Number(floor);
                           policy.mutate({ minDecryptionVersion: value });
@@ -207,7 +248,9 @@ export function KeyPage({ name, onBack }: { name: string; onBack: () => void }) 
                       />
                       <Button
                         size="sm"
-                        disabled={description === null || policy.isPending}
+                        disabled={
+                          description === null || policy.isPending || readOnly !== undefined
+                        }
                         onClick={() => {
                           policy.mutate({ description: description === '' ? null : description });
                           setDescription(null);
@@ -221,7 +264,7 @@ export function KeyPage({ name, onBack }: { name: string; onBack: () => void }) 
                     <Button
                       size="sm"
                       variant={data.deletionAllowed ? 'ghost' : 'secondary'}
-                      disabled={policy.isPending}
+                      disabled={policy.isPending || readOnly !== undefined}
                       onClick={() => policy.mutate({ deletionAllowed: !data.deletionAllowed })}
                     >
                       {data.deletionAllowed ? 'Forbid deletion' : 'Allow deletion'}
@@ -229,7 +272,7 @@ export function KeyPage({ name, onBack }: { name: string; onBack: () => void }) 
                     <Button
                       size="sm"
                       variant={data.exportable ? 'ghost' : 'secondary'}
-                      disabled={policy.isPending}
+                      disabled={policy.isPending || readOnly !== undefined}
                       onClick={() => policy.mutate({ exportable: !data.exportable })}
                     >
                       {data.exportable ? 'Forbid export' : 'Allow export'}

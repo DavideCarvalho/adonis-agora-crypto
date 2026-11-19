@@ -3,9 +3,12 @@ import { parseAsString, useQueryState } from 'nuqs';
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIcon,
+  AppModeBadge,
   AppShell,
+  actionsUnavailableReason,
   DocumentIcon,
   ErrorBoundary,
+  FederatedNotice,
   NuqsHashAdapter,
   PageBody,
   readShellConfig,
@@ -16,7 +19,12 @@ import {
   subscribeHashUrl,
 } from '../agora-kit';
 import { Skeleton } from '../agora-kit/ui/skeleton';
-import { CryptoApi, type Meta, readBootstrap } from '../client/crypto-client';
+import {
+  CryptoApi,
+  type FederatedAppInfo,
+  type Meta,
+  readBootstrap,
+} from '../client/crypto-client';
 import { AuditPage } from './AuditPage';
 import { ConsoleContext } from './console-context';
 import { KeyPage } from './KeyPage';
@@ -116,20 +124,31 @@ const APP_TEXT = {
 function AppPicker({
   value,
   options,
+  federated,
   onChange,
 }: {
   value: string;
   options: readonly string[];
+  /** The options that are other apps: their label, and a `federated` hint. */
+  federated: readonly FederatedAppInfo[];
   onChange: (value: string) => void;
 }) {
-  if (options.length <= 1) return <ScopeChip noun={APP_TEXT.noun} label={value} kind="app" />;
+  const labelOf = (id: string) => federated.find((app) => app.id === id)?.label ?? id;
+  if (options.length <= 1) {
+    return <ScopeChip noun={APP_TEXT.noun} label={labelOf(value)} kind="app" />;
+  }
   return (
     <ScopeMenu
-      items={options.map((id) => ({ id, label: id }))}
+      items={options.map((id) => {
+        const other = federated.find((app) => app.id === id);
+        return other
+          ? { id, label: other.label, ...(other.mode === 'federated' ? { hint: 'federated' } : {}) }
+          : { id, label: id };
+      })}
       all={false}
       current={value}
       text={APP_TEXT}
-      labelOf={(id) => id}
+      labelOf={labelOf}
       onChoose={(next) => {
         if (next !== undefined) onChange(next);
       }}
@@ -220,6 +239,9 @@ function Console() {
   }
 
   const apps = [...new Set([...meta.data.apps, partition])];
+  const federatedApps = meta.data.federated ?? [];
+  const federated = federatedApps.find((app) => app.id === partition);
+  const readOnly = federated ? actionsUnavailableReason(federated.label, federated) : undefined;
   const current: ReactNode =
     route.page === 'overview' ? (
       <OverviewPage />
@@ -232,7 +254,9 @@ function Console() {
     );
 
   return (
-    <ConsoleContext.Provider value={{ api, meta: meta.data, partition, setPartition }}>
+    <ConsoleContext.Provider
+      value={{ api, meta: meta.data, partition, setPartition, federated, readOnly }}
+    >
       <AppShell
         brand={{
           name: 'crypto',
@@ -277,19 +301,36 @@ function Console() {
         shell={shell}
         title={TITLES[route.page]}
         actions={
-          <AppPicker
-            value={partition}
-            options={apps}
-            onChange={(next) => {
-              // A key belongs to one app: going back to the list avoids showing a 404 page.
-              if (route.page === 'key')
-                go({ page: 'keys' }, next === defaultPartition ? null : next);
-              else setPartition(next);
-            }}
-          />
+          <>
+            <AppPicker
+              value={partition}
+              options={apps}
+              federated={federatedApps}
+              onChange={(next) => {
+                // A key belongs to one app: going back to the list avoids showing a 404 page.
+                if (route.page === 'key')
+                  go({ page: 'keys' }, next === defaultPartition ? null : next);
+                else setPartition(next);
+              }}
+            />
+            {federated ? (
+              <AppModeBadge
+                appLabel={federated.label}
+                mode={federated.mode}
+                actions={federated.actions}
+              />
+            ) : null}
+          </>
         }
       >
         <PageBody>
+          {federated ? (
+            <FederatedNotice
+              appLabel={federated.label}
+              mode={federated.mode}
+              actions={federated.actions}
+            />
+          ) : null}
           <ErrorBoundary label={TITLES[route.page]} resetKeys={[route, partition]}>
             {current}
           </ErrorBoundary>
