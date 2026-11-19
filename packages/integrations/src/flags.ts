@@ -1,5 +1,6 @@
 import { cryptoFetch } from '@adonis-agora/crypto-core';
 import { type CipherSource, cipherFor } from './source.js';
+import { cryptoServerUse, describeStackUse } from './stack.js';
 
 /** The key a flags app uses for its event hop by default. */
 export const FLAGS_EVENTS_KEY = 'flags-events';
@@ -42,13 +43,16 @@ export interface FlagsEnvelopeOptions {
 export function flagsEnvelope(options: FlagsEnvelopeOptions): { fetch: typeof fetch } {
   const key = options.key ?? FLAGS_EVENTS_KEY;
   return {
-    fetch: cryptoFetch({
-      client: cipherFor(options.source, 'flags:events'),
-      key,
-      ...(options.aad !== undefined ? { aad: options.aad } : {}),
-      ...(options.maxAgeSec !== undefined ? { maxAgeSec: options.maxAgeSec } : {}),
-      ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
-    }),
+    fetch: describeStackUse(
+      cryptoFetch({
+        client: cipherFor(options.source, 'flags:events'),
+        key,
+        ...(options.aad !== undefined ? { aad: options.aad } : {}),
+        ...(options.maxAgeSec !== undefined ? { maxAgeSec: options.maxAgeSec } : {}),
+        ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
+      }),
+      cryptoServerUse('flags events'),
+    ),
   };
 }
 

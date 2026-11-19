@@ -1,5 +1,6 @@
 import { sealedPayloads } from './payloads.js';
 import type { CipherSource } from './source.js';
+import { cryptoServerUse, STACK_DESCRIPTOR, withUse } from './stack.js';
 
 /**
  * The parts of durable's `Transport`/`ControlPlane` these decorators understand, declared
@@ -69,6 +70,10 @@ export function encryptedTransport<T extends TransportLike>(
 
   return new Proxy(inner, {
     get(target, property) {
+      // Telescope: what the wrapped transport uses, plus the crypto server for its payloads.
+      if (property === STACK_DESCRIPTOR) {
+        return withUse(Reflect.get(target, property, target), cryptoServerUse('durable payloads'));
+      }
       if (property === 'dispatch') {
         return async (task: { input?: unknown } & Record<string, unknown>) => {
           const sealed = { ...task, input: await payloads.seal(task.input) };
@@ -140,6 +145,9 @@ export function encryptedControlPlane<T extends ControlPlaneLike>(
 
   return new Proxy(inner, {
     get(target, property) {
+      if (property === STACK_DESCRIPTOR) {
+        return withUse(Reflect.get(target, property, target), cryptoServerUse('durable events'));
+      }
       if (property === 'publishControl') {
         return async (message: { kind: string; event?: unknown } & Record<string, unknown>) => {
           const outgoing =
