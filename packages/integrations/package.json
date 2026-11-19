@@ -1,6 +1,6 @@
 {
   "name": "@adonis-agora/crypto-integrations",
-  "version": "0.3.10",
+  "version": "0.4.0",
   "description": "Seams between @adonis-agora/crypto and the other Agora libs — KMS roots for authkit, agent and config, encrypted durable transport/control-plane, encryption at rest for collaboration documents, envelope fetch for flags and any service-to-service call. Kept at 0.x so the rc libs stay untouched.",
   "license": "MIT",
   "repository": {
