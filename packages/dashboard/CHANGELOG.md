@@ -1,5 +1,11 @@
 # @adonis-agora/crypto-dashboard
 
+## 0.3.5
+
+### Patch Changes
+
+- [#37](https://github.com/DavideCarvalho/adonis-agora-crypto/pull/37) [`51276ce`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/51276ce20df3ca59294bd32ad9a3a2eb15c26ac9) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Scope picker: the button is named "App: Hub" / "Organization: Globex" for screen readers, search also matches the hint, the highlight stays on a real option when the list shrinks, and focus returns to the button after a pick.
+
 ## 0.3.4
 
 ### Patch Changes
