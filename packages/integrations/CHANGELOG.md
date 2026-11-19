@@ -1,5 +1,11 @@
 # @adonis-agora/crypto-integrations
 
+## 0.3.9
+
+### Patch Changes
+
+- [#35](https://github.com/DavideCarvalho/adonis-agora-crypto/pull/35) [`68f3008`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/68f300876c6a7609fed76e89f915d255f2491a1f) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - The seams describe what they use to telescope's Architecture page: `encryptedTransport` and `encryptedControlPlane` add the crypto server (`durable payloads`, `durable events`) to what the wrapped transport already says, and keep durable's own hints readable through the wrapper; the flags and http envelopes tag their `fetch` (`flags events`, `http envelope`).
+
 ## 0.3.8
 
 ### Patch Changes
