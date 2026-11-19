@@ -333,3 +333,14 @@ describe('collaborationCodec: stack descriptor', () => {
     ]);
   });
 });
+
+describe('collaborationCodec: no runtime dependency', () => {
+  it('imports neither @adonis-agora/crypto nor @adonis-agora/collaboration at runtime', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const source = await readFile(new URL('../src/collaboration.ts', import.meta.url), 'utf8');
+    const runtimeImports = [...source.matchAll(/^import (?!type )[^;]*from '([^']+)'/gm)].map(
+      (match) => match[1],
+    );
+    expect(runtimeImports).toEqual(['node:crypto', './stack.js']);
+  });
+});

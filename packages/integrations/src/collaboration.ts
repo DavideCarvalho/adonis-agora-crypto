@@ -1,11 +1,13 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
-import { type Cipher, type CipherSource, cipherFor } from './source.js';
+import type { Cipher, CipherSource } from './source.js';
 import { cryptoServerUse, describeStackUse } from './stack.js';
 
 /*
  * `@adonis-agora/collaboration` is an optional peer: its storage codec contract is declared
  * structurally below (the same shapes as its `StorageCodec`, `StorageCodecContext` and
- * `StorageCodecValue`), so nothing here imports it, at runtime or for types.
+ * `StorageCodecValue`), so nothing here imports it, at runtime or for types. Nothing here imports
+ * `@adonis-agora/crypto` at runtime either: an app on another crypto version loads this subpath
+ * without a second copy of the crypto lib.
  */
 
 /** What the collaboration storage hands a codec: raw bytes, or a string. */
@@ -178,7 +180,7 @@ export function collaborationCodec<M = RegExpExecArray>(
     if (options.key === undefined) {
       throw new TypeError('crypto: collaborationCodec with `source` needs a `key`');
     }
-    const cipher = cipherFor(options.source, 'collaboration');
+    const cipher = cipherOf(options.source);
     const keyOption = options.key;
     const keyOf = (match: M, ctx: CollaborationCodecContext) =>
       typeof keyOption === 'function' ? keyOption(match, ctx) : keyOption;
@@ -222,6 +224,21 @@ export function collaborationCodec<M = RegExpExecArray>(
     },
   };
   return describeStackUse(codec, cryptoServerUse('collaboration documents'));
+}
+
+/** `cipherFor` without its runtime import of `@adonis-agora/crypto` (any installed copy fits). */
+function cipherOf(source: CipherSource): Cipher {
+  if ('client' in source) return source.client;
+  const { service, partition } = source;
+  const principal = {
+    partition,
+    capabilities: ['crypto:*'],
+    actor: source.actor ?? 'collaboration',
+  };
+  return {
+    encrypt: (input) => service.encrypt(principal, input),
+    decrypt: (input) => service.decrypt(principal, input),
+  };
 }
 
 function matcher<M>(docs: CollaborationCodecOptions<M>['docs']): (docName: string) => M | null {
