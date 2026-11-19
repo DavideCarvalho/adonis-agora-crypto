@@ -1,5 +1,11 @@
 # @adonis-agora/crypto-core
 
+## 0.7.2
+
+### Patch Changes
+
+- [#34](https://github.com/DavideCarvalho/adonis-agora-crypto/pull/34) [`20970e7`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/20970e751ec9291ba284894aff25f5f3c8b4ac4c) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - The key and data key stores, the broker transports (when handed an `@adonisjs/redis` connection) and `cryptoServerKms` now describe the infrastructure they use (`Symbol.for('@adonis-agora/stack')`), and the `defineConfig` result describes the default Lucid stores, so telescope's Architecture page shows "crypto: keys → PostgreSQL" without any app code.
+
 ## 0.7.1
 
 ### Patch Changes
