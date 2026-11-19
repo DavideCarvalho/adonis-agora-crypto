@@ -1,5 +1,11 @@
 # @adonis-agora/crypto-dashboard
 
+## 0.3.4
+
+### Patch Changes
+
+- [#36](https://github.com/DavideCarvalho/adonis-agora-crypto/pull/36) [`7aafd49`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/7aafd4999ac4499b1db23bd3482bdbc5f7fd57b1) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Console: the topbar App picker is now the shared kit picker (`ScopeMenu`, a fixed `ScopeChip` when there is only one app), the same one telescope uses; the pick still lives in `?app=` in the hash. Going to another console (switcher, ⌘K, search results, sidebar links) keeps this page's `?app=` and `?tenant=`. The console kit copy is updated from the canonical kit.
+
 ## 0.3.3
 
 ### Patch Changes
