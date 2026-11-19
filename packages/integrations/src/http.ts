@@ -31,6 +31,7 @@ export { type CipherSource, cipherFor } from './source.js';
 
 import { cryptoFetch } from '@adonis-agora/crypto-core';
 import { type CipherSource, cipherFor } from './source.js';
+import { cryptoServerUse, describeStackUse } from './stack.js';
 
 export interface HttpEnvelopeOptions {
   source: CipherSource;
@@ -55,12 +56,15 @@ export interface HttpEnvelopeOptions {
  */
 export function httpEnvelope(options: HttpEnvelopeOptions): { fetch: typeof fetch } {
   return {
-    fetch: cryptoFetch({
-      client: cipherFor(options.source, 'http:envelope'),
-      key: options.key,
-      ...(options.aad !== undefined ? { aad: options.aad } : {}),
-      ...(options.maxAgeSec !== undefined ? { maxAgeSec: options.maxAgeSec } : {}),
-      ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
-    }),
+    fetch: describeStackUse(
+      cryptoFetch({
+        client: cipherFor(options.source, 'http:envelope'),
+        key: options.key,
+        ...(options.aad !== undefined ? { aad: options.aad } : {}),
+        ...(options.maxAgeSec !== undefined ? { maxAgeSec: options.maxAgeSec } : {}),
+        ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
+      }),
+      cryptoServerUse('http envelope'),
+    ),
   };
 }
