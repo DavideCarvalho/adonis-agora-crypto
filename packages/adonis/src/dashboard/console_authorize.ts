@@ -19,6 +19,12 @@ export type ConsoleAuthorizeResult =
        * flags' consoles.
        */
       apps?: '*' | string[];
+      /**
+       * What this viewer may do, in the capability vocabulary (`crypto:keys:manage`,
+       * `crypto:encrypt:<key>`, `crypto:*`). Only the federated console reads it: an operation sent
+       * to another app runs with what that app allows, narrowed to this.
+       */
+      capabilities?: string[];
     }
   | { allowed: false; reason?: 'unauthenticated' | 'forbidden' }
   | { redirectTo: string };
@@ -39,7 +45,7 @@ export type ConsoleAuthorize =
 
 /** A {@link ConsoleAuthorizeResult} normalized to the answer the console writes. */
 export type ConsoleAuthorizeDecision =
-  | { allowed: true; apps?: '*' | string[] }
+  | { allowed: true; apps?: '*' | string[]; capabilities?: string[] }
   | { allowed: false; status: 401; reason: 'unauthenticated' }
   | { allowed: false; status: 403; reason: 'forbidden'; error?: unknown }
   | { allowed: false; status: 302; redirectTo: string };
@@ -68,10 +74,22 @@ function lazyModuleClass(value: unknown): ConsoleAuthorizerClass | undefined {
 export function normalizeConsoleAuthorizeResult(result: unknown): ConsoleAuthorizeDecision {
   if (result === true) return { allowed: true };
   if (typeof result !== 'object' || result === null) return FORBIDDEN;
-  const value = result as { allowed?: unknown; reason?: unknown; redirectTo?: unknown };
+  const value = result as {
+    allowed?: unknown;
+    reason?: unknown;
+    redirectTo?: unknown;
+    capabilities?: unknown;
+  };
   if (value.allowed === true) {
     const apps = appsGrant((result as { apps?: unknown }).apps);
-    return apps === undefined ? { allowed: true } : { allowed: true, apps };
+    const capabilities = Array.isArray(value.capabilities)
+      ? value.capabilities.filter((c): c is string => typeof c === 'string' && c !== '')
+      : undefined;
+    return {
+      allowed: true,
+      ...(apps !== undefined ? { apps } : {}),
+      ...(capabilities !== undefined ? { capabilities } : {}),
+    };
   }
   if (value.allowed === undefined && typeof value.redirectTo === 'string' && value.redirectTo) {
     return { allowed: false, status: 302, redirectTo: value.redirectTo };

@@ -1,4 +1,5 @@
 import type { HttpContext } from '@adonisjs/core/http';
+import type { FederatedCryptoAppConfig } from '../federation/console.js';
 import type { AccessDeniedOption } from './access_denied_page.js';
 import type { ConsoleAuthorize } from './console_authorize.js';
 import type { SignOutOption, ViewerHook } from './console_shell.js';
@@ -29,6 +30,17 @@ export interface CryptoDashboardConfig {
    * Default: every app the store holds.
    */
   apps?: string[];
+  /**
+   * Other apps this console shows next to its own (the federated console): apps that run
+   * `@adonis-agora/crypto` standalone, with their own store and root key. The console reads each
+   * one's key metadata and audit straight from its tables (never the key material), and sends every
+   * key operation to the app itself over Redis; that app sets `consoleCommands` in its
+   * config/crypto.ts. The key is what the App picker selects (`?app=`); `authorize`'s `apps` grant
+   * decides who sees which.
+   */
+  federatedApps?: Record<string, FederatedCryptoAppConfig>;
+  /** This console's own name in the App picker, and the `via` the other apps record. */
+  appLabel?: string;
 }
 
 export interface ResolvedConsoleConfig {
@@ -41,6 +53,8 @@ export interface ResolvedConsoleConfig {
   accessDenied?: AccessDeniedOption<HttpContext>;
   loginHref?: string;
   apps?: string[];
+  federatedApps?: Record<string, FederatedCryptoAppConfig>;
+  appLabel?: string;
 }
 
 /** Normalizes the mount path: a same-origin absolute path, no trailing slash (root is `''`). */
@@ -73,5 +87,9 @@ export function resolveDashboardConfig(
     ...(provided.accessDenied ? { accessDenied: provided.accessDenied } : {}),
     ...(provided.loginHref ? { loginHref: provided.loginHref } : {}),
     ...(provided.apps ? { apps: provided.apps } : {}),
+    ...(provided.federatedApps && Object.keys(provided.federatedApps).length > 0
+      ? { federatedApps: provided.federatedApps }
+      : {}),
+    ...(provided.appLabel ? { appLabel: provided.appLabel } : {}),
   };
 }

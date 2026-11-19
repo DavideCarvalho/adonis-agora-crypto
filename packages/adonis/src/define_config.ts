@@ -166,6 +166,19 @@ export interface StandaloneConfig extends BaseConfig {
   schema?: string;
   /** Mount the console (the SPA + its JSON API). Default on. */
   console?: CryptoDashboardConfig | false;
+  /**
+   * Answer another app's federated crypto console (its `console.federatedApps`): that console reads
+   * this app's key metadata and audit from the database, never the key material, and sends here
+   * every key operation — create, rotate, change the policy, delete, test, rewrap (with
+   * `actions: true`). This app runs each one through its own service and audit, with the other
+   * console's viewer as the actor. Every web instance listens; one claims each command. Export is
+   * never a command. Needs `@adonisjs/redis`. Off when omitted.
+   *
+   * ```ts
+   * consoleCommands: { connection: 'main', prefix: 'entretextos', actions: true },
+   * ```
+   */
+  consoleCommands?: CryptoConsoleCommandsConfig;
 }
 
 /** The server every app connects to. */
@@ -195,6 +208,40 @@ export interface ControlPlaneConfig extends BaseConfig {
   schema?: string;
   /** Mount the console (the SPA + its JSON API). Default on. */
   console?: CryptoDashboardConfig | false;
+  /**
+   * Answer another app's federated crypto console (its `console.federatedApps`): that console reads
+   * this app's key metadata and audit from the database, never the key material, and sends here
+   * every key operation — create, rotate, change the policy, delete, test, rewrap (with
+   * `actions: true`). This app runs each one through its own service and audit, with the other
+   * console's viewer as the actor. Every web instance listens; one claims each command. Export is
+   * never a command. Needs `@adonisjs/redis`. Off when omitted.
+   *
+   * ```ts
+   * consoleCommands: { connection: 'main', prefix: 'entretextos', actions: true },
+   * ```
+   */
+  consoleCommands?: CryptoConsoleCommandsConfig;
+}
+
+/** {@link StandaloneConfig.consoleCommands}. */
+export interface CryptoConsoleCommandsConfig {
+  /** The `@adonisjs/redis` connection. Defaults to its default connection. */
+  connection?: string;
+  /**
+   * This app's name on the channel (`<prefix>-crypto-console`): the same `prefix` the other
+   * console names in its `federatedApps` entry. Not the connection's `keyPrefix`.
+   */
+  prefix: string;
+  /** Run key operations sent by the other console. Default `false` (it only browses). */
+  actions?: boolean;
+  /**
+   * What the other console may do here, narrowed further by what its `authorize` granted the
+   * viewer. Default: manage keys, and encrypt/decrypt/sign/verify/hmac/rewrap with any of them
+   * (what the key test and rewrap use). `crypto:keys:export` is always dropped.
+   */
+  capabilities?: string[];
+  /** The partitions the other console may touch. Default: this app's own (`app`), else any. */
+  partitions?: string[];
 }
 
 /** An app that asks a central crypto server for every operation. */
@@ -234,6 +281,7 @@ export interface TenantTopologyConfig extends BaseConfig {
   autoCreateSchema?: never;
   schema?: never;
   console?: never;
+  consoleCommands?: never;
   maxBatchSize?: never;
 }
 

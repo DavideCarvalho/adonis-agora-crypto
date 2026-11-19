@@ -9,6 +9,7 @@
     "deployment",
     "kms",
     "console",
+    "federated-console",
     "commands",
     "mcp",
     "doctor",

@@ -84,8 +84,28 @@ export interface Overview {
   lastOperationAt?: string;
 }
 
+/** Another app the federated console shows (`console.federatedApps`). */
+export interface FederatedAppInfo {
+  id: string;
+  label: string;
+  mode?: 'federated' | 'control-plane';
+  /** Who runs key operations on it: the app itself (`app`), or nobody from here (`none`). */
+  actions?: 'app' | 'none' | 'here';
+}
+
+/** A key test: which operations ran and whether they round-tripped (no plaintext or ciphertext). */
+export interface KeyTestResult {
+  key: string;
+  type: KeyType;
+  version: number;
+  ok: boolean;
+  operations: string[];
+}
+
 export interface Meta {
   apps: string[];
+  /** The apps of `apps` that are other apps (federated), with how they are reached. */
+  federated?: FederatedAppInfo[];
   defaultPartition: string;
   topology: 'standalone' | 'control-plane';
   actor: string;
@@ -212,6 +232,15 @@ export class CryptoApi {
       'PATCH',
       `/keys/${encodeURIComponent(name)}?${this.#query(partition)}`,
       input,
+    );
+  }
+
+  /** Run a key once with a random probe (encrypt + decrypt, sign + verify, or HMAC). */
+  testKey(partition: string, name: string): Promise<KeyTestResult> {
+    return this.#request(
+      'POST',
+      `/keys/${encodeURIComponent(name)}/test?${this.#query(partition)}`,
+      {},
     );
   }
 

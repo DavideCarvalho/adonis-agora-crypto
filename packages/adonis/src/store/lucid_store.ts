@@ -20,6 +20,12 @@ export interface LucidStoreOptions {
   autoCreateSchema?: boolean;
   /** Clock, so tests can pin timestamps. */
   now?: () => string;
+  /**
+   * Read another app's keys without their material (the federated console): every version is read
+   * without its `material` column (`sealed` comes back empty), so the role needs no `SELECT` on it,
+   * and every write is refused. Default `false`.
+   */
+  metadataOnly?: boolean;
 }
 
 interface KeyRow {
@@ -66,6 +72,9 @@ interface AuditRow {
 const KEY_COLUMNS =
   'app, name, type, description, latest_version, min_decryption_version, deletion_allowed, exportable, created_at, created_by, updated_at, updated_by, deleted_at';
 const VERSION_COLUMNS = 'app, name, version, material, kid, public_key, created_at, created_by';
+/** {@link VERSION_COLUMNS} without the sealed material: what a metadata-only store selects. */
+const VERSION_METADATA_COLUMNS =
+  "app, name, version, '' AS material, kid, public_key, created_at, created_by";
 const AUDIT_COLUMNS =
   'id, at, app, key_name, version, operation, actor, client_id, result, error, metadata';
 
@@ -142,8 +151,19 @@ export class LucidStore implements CryptoStore {
     this.dialect = dialectOf(db);
   }
 
+  /** The version columns this store reads: never `material` in a metadata-only store. */
+  get #versionColumns(): string {
+    return this.options.metadataOnly ? VERSION_METADATA_COLUMNS : VERSION_COLUMNS;
+  }
+
+  #assertWritable(): void {
+    if (this.options.metadataOnly) {
+      throw new Error("crypto: this store only reads another app's key metadata");
+    }
+  }
+
   async setup(): Promise<void> {
-    if (this.options.autoCreateSchema === false) return;
+    if (this.options.autoCreateSchema === false || this.options.metadataOnly) return;
     await query(
       this.db,
       `CREATE TABLE IF NOT EXISTS crypto_keys (
@@ -235,7 +255,7 @@ export class LucidStore implements CryptoStore {
   ): Promise<CryptoKeyVersionRecord | null> {
     const rows = await query<VersionRow>(
       this.db,
-      `SELECT ${VERSION_COLUMNS} FROM crypto_key_versions WHERE app = ? AND name = ? AND version = ? LIMIT 1`,
+      `SELECT ${this.#versionColumns} FROM crypto_key_versions WHERE app = ? AND name = ? AND version = ? LIMIT 1`,
       [partition, name, version],
     );
     return rows[0] ? versionOf(rows[0]) : null;
@@ -244,13 +264,14 @@ export class LucidStore implements CryptoStore {
   async versions(partition: string, name: string): Promise<CryptoKeyVersionRecord[]> {
     const rows = await query<VersionRow>(
       this.db,
-      `SELECT ${VERSION_COLUMNS} FROM crypto_key_versions WHERE app = ? AND name = ? ORDER BY version ASC`,
+      `SELECT ${this.#versionColumns} FROM crypto_key_versions WHERE app = ? AND name = ? ORDER BY version ASC`,
       [partition, name],
     );
     return rows.map(versionOf);
   }
 
   async createKey(key: CryptoKeyRecord, version: CryptoKeyVersionRecord): Promise<void> {
+    this.#assertWritable();
     await this.db.transaction(async (trx) => {
       await query(
         trx,
@@ -293,6 +314,7 @@ export class LucidStore implements CryptoStore {
     version: CryptoKeyVersionRecord,
     next: { latestVersion: number; updatedAt: string; updatedBy: string },
   ): Promise<void> {
+    this.#assertWritable();
     let lastError: unknown;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
@@ -341,6 +363,7 @@ export class LucidStore implements CryptoStore {
   }
 
   async updateKey(partition: string, name: string, patch: KeyPolicyPatch): Promise<void> {
+    this.#assertWritable();
     const current = await this.getKey(partition, name);
     if (!current) throw new Error(`crypto: key "${name}" does not exist`);
     const description =
@@ -374,6 +397,7 @@ export class LucidStore implements CryptoStore {
     sealed: string,
     kid?: string,
   ): Promise<void> {
+    this.#assertWritable();
     await query(
       this.db,
       'UPDATE crypto_key_versions SET material = ?' +
@@ -386,6 +410,7 @@ export class LucidStore implements CryptoStore {
   }
 
   async deleteKey(partition: string, name: string, at: string, by: string): Promise<void> {
+    this.#assertWritable();
     await this.db.transaction(async (trx) => {
       const current = await query<KeyRow>(
         trx,
@@ -407,6 +432,7 @@ export class LucidStore implements CryptoStore {
   }
 
   async appendAudit(record: CryptoAuditRecord): Promise<void> {
+    this.#assertWritable();
     await query(
       this.db,
       `INSERT INTO crypto_audit

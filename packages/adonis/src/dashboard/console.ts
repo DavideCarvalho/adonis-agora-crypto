@@ -9,6 +9,13 @@ import {
 import { InvalidColumnFilterError } from '@adonis-agora/filter';
 import type { HttpContext } from '@adonisjs/core/http';
 import type { CryptoPrincipal, CryptoService } from '../crypto/service.js';
+import {
+  type CommandMeta,
+  FederatedAppError,
+  type FederatedCryptoApp,
+  type FederatedCryptoApps,
+  testKey,
+} from '../federation/console.js';
 import { parseAuditRequest, parseListQuery } from '../http/list.js';
 import { resolveAccessDeniedPage } from './access_denied_page.js';
 import { type ConsoleActor, consoleActor } from './actor.js';
@@ -48,6 +55,8 @@ export interface CryptoConsoleOptions {
   topology: 'standalone' | 'control-plane';
   registry?: AgoraConsoleRegistry;
   logger: { warn(message: string): void; info?(message: string): void };
+  /** Other apps this console shows (`console.federatedApps`): read from their stores, operated through them. */
+  federated?: FederatedCryptoApps;
 }
 
 /** This console's id in the `'agora.consoles'` registry. */
@@ -73,6 +82,8 @@ export class CryptoConsole {
   readonly #authorize: (ctx: HttpContext) => Promise<ConsoleAuthorizeDecision>;
   /** The `apps` grant of each request that passed the guard. */
   readonly #grants = new WeakMap<HttpContext, '*' | string[] | undefined>();
+  /** The `capabilities` of each request that passed the guard, when the authorizer said. */
+  readonly #capabilities = new WeakMap<HttpContext, string[]>();
   #warned = false;
 
   constructor(private readonly options: CryptoConsoleOptions) {
@@ -116,6 +127,7 @@ export class CryptoConsole {
     router.get(`${root}/assets/:file`, (ctx) => this.asset(ctx));
 
     router.get(`${api}/meta`, (ctx) => this.#guarded(ctx, () => this.meta(ctx)));
+    router.get(`${api}/apps`, (ctx) => this.#guarded(ctx, () => this.apps(ctx)));
     router.get(`${api}/overview`, (ctx) => this.#guarded(ctx, () => this.overview(ctx)));
     router.get(`${api}/keys`, (ctx) => this.#guarded(ctx, () => this.listKeys(ctx)));
     router.post(`${api}/keys`, (ctx) => this.#guarded(ctx, () => this.createKey(ctx)));
@@ -123,6 +135,8 @@ export class CryptoConsole {
     router.patch(`${api}/keys/:name`, (ctx) => this.#guarded(ctx, () => this.updateKey(ctx)));
     router.delete(`${api}/keys/:name`, (ctx) => this.#guarded(ctx, () => this.deleteKey(ctx)));
     router.post(`${api}/keys/:name/rotate`, (ctx) => this.#guarded(ctx, () => this.rotateKey(ctx)));
+    router.post(`${api}/keys/:name/test`, (ctx) => this.#guarded(ctx, () => this.testKey(ctx)));
+    router.post(`${api}/keys/:name/rewrap`, (ctx) => this.#guarded(ctx, () => this.rewrap(ctx)));
     router.get(`${api}/audit`, (ctx) => this.#guarded(ctx, () => this.audit(ctx)));
     router.get(`${api}/consoles`, (ctx) => this.#guarded(ctx, () => this.consoles(ctx)));
     router.get(`${api}/consoles/search`, (ctx) => this.#guarded(ctx, () => this.search(ctx)));
@@ -132,6 +146,9 @@ export class CryptoConsole {
     const decision = await this.#authorize(ctx);
     if (decision.allowed) {
       this.#grants.set(ctx, decision.apps);
+      if (Array.isArray(decision.capabilities)) {
+        this.#capabilities.set(ctx, decision.capabilities);
+      }
       return true;
     }
     if (decision.status === 302) {
@@ -174,6 +191,14 @@ export class CryptoConsole {
 
   #fail(ctx: HttpContext, error: unknown) {
     if (error instanceof HttpError) {
+      return ctx.response.status(error.status).json({ error: error.message });
+    }
+    if (error instanceof FederatedAppError) {
+      if (error.detail !== undefined) {
+        this.options.logger.warn(
+          `[@adonis-agora/crypto] federated console: ${error.message}: ${error.detail}`,
+        );
+      }
       return ctx.response.status(error.status).json({ error: error.message });
     }
     if (error instanceof InvalidColumnFilterError) {
@@ -219,6 +244,54 @@ export class CryptoConsole {
 
   async #actor(ctx: HttpContext): Promise<ConsoleActor> {
     return consoleActor(ctx);
+  }
+
+  /** The app's raw pick (`partition`, from the query or the body), before any check. */
+  #picked(ctx: HttpContext): string | undefined {
+    const query = ctx.request.qs() as Record<string, unknown>;
+    const body = this.#body(ctx);
+    if (typeof query.partition === 'string' && query.partition !== '') return query.partition;
+    if (typeof body.partition === 'string' && body.partition !== '') return body.partition;
+    return undefined;
+  }
+
+  /**
+   * The other app a request is about, when it names a key of `console.federatedApps` (the
+   * viewer's `apps` grant must name it too), else `undefined` for this console's own partitions.
+   */
+  async #federated(ctx: HttpContext): Promise<FederatedCryptoApp | undefined> {
+    const picked = this.#picked(ctx);
+    const federated = this.options.federated;
+    if (picked === undefined || !federated?.has(picked)) return undefined;
+    const grant = this.#grants.get(ctx);
+    if (!(grant === undefined || grant === '*' || grant.includes(picked))) {
+      throw new HttpError(403, `app "${picked}" is not granted to this viewer`);
+    }
+    return federated.get(picked);
+  }
+
+  /**
+   * The service and principal a request reads with: another app's (metadata only, through its own
+   * store) or this console's (full rights: it is the server).
+   */
+  async #reader(ctx: HttpContext): Promise<{ service: CryptoService; principal: CryptoPrincipal }> {
+    const federated = await this.#federated(ctx);
+    if (federated) {
+      const actor = await this.#actor(ctx);
+      return { service: federated.service, principal: federated.reader(actor.id) };
+    }
+    return { service: this.options.service, principal: await this.#principal(ctx) };
+  }
+
+  /** What a command to another app carries: the viewer (the actor) and what it was granted. */
+  async #commandMeta(ctx: HttpContext): Promise<CommandMeta> {
+    const actor = await this.#actor(ctx);
+    const capabilities = this.#capabilities.get(ctx);
+    return {
+      actor: actor.id,
+      ...(capabilities !== undefined ? { capabilities } : {}),
+      ...(this.options.config.appLabel !== undefined ? { via: this.options.config.appLabel } : {}),
+    };
   }
 
   /** Everything the console does acts for the operator, with full rights: it is the server. */
@@ -302,11 +375,16 @@ export class CryptoConsole {
     const grant = this.#grants.get(ctx);
     const fallback = this.options.defaultPartition;
     // The static list (or every app the store holds), narrowed to the viewer's grant.
-    const apps = consoleVisibleApps(
-      this.options.config.apps ?? partitions,
-      this.options.config.apps,
-      grant,
-    );
+    const federated = this.#visibleFederated(ctx);
+    // Another app's key names that app here, so a local partition of the same name is not listed.
+    const apps = [
+      ...consoleVisibleApps(
+        this.options.config.apps ?? partitions,
+        this.options.config.apps,
+        grant,
+      ).filter((app) => !this.options.federated?.has(app)),
+      ...federated,
+    ];
     const fallbackAllowed =
       fallback !== undefined && consoleAppAllowed(fallback, this.options.config.apps, grant);
     const defaultPartition =
@@ -318,6 +396,9 @@ export class CryptoConsole {
       defaultPartition,
       topology: this.options.topology,
       actor: actor.id,
+      ...(federated.length > 0
+        ? { federated: federated.map((id) => this.options.federated!.describe(id)) }
+        : {}),
       keyTypes: ['aes256-gcm', 'x25519', 'ed25519', 'hmac-sha256'],
       capabilityLegend: [
         'crypto:encrypt:<key>',
@@ -334,15 +415,35 @@ export class CryptoConsole {
     });
   }
 
+  /** The federated apps this viewer may see (`console.federatedApps` ∩ the `apps` grant). */
+  #visibleFederated(ctx: HttpContext): string[] {
+    const grant = this.#grants.get(ctx);
+    return (this.options.federated?.ids ?? []).filter(
+      (id) => grant === undefined || grant === '*' || grant.includes(id),
+    );
+  }
+
+  /**
+   * The App picker of the federated console, the shape every Agora console answers: this
+   * console's own partitions are `local`, the other apps are listed with how they are reached.
+   */
+  async apps(ctx: HttpContext) {
+    const federated = this.#visibleFederated(ctx);
+    const picked = this.#picked(ctx) ?? (ctx.request.qs() as { app?: unknown }).app;
+    return ctx.response.header('cache-control', 'no-store').json({
+      local: { label: this.options.config.appLabel ?? 'This app' },
+      apps: federated.map((id) => this.options.federated!.describe(id)),
+      selected: typeof picked === 'string' && federated.includes(picked) ? picked : null,
+    });
+  }
+
   async overview(ctx: HttpContext) {
-    const principal = await this.#principal(ctx);
-    return ctx.response
-      .header('cache-control', 'no-store')
-      .json(await this.options.service.overview(principal));
+    const { service, principal } = await this.#reader(ctx);
+    return ctx.response.header('cache-control', 'no-store').json(await service.overview(principal));
   }
 
   async listKeys(ctx: HttpContext) {
-    const principal = await this.#principal(ctx);
+    const { service, principal } = await this.#reader(ctx);
     const list = parseListQuery(ctx.request.qs() as Record<string, unknown>, {
       sortable: ['name', 'createdAt', 'updatedAt'],
       defaultSort: { field: 'name', direction: 'asc' },
@@ -350,7 +451,7 @@ export class CryptoConsole {
       defaultSize: 50,
       maxSize: 200,
     });
-    const page: OffsetPage<CryptoKeyView> = await this.options.service.listKeys(principal, {
+    const page: OffsetPage<CryptoKeyView> = await service.listKeys(principal, {
       page: list.page,
       size: list.size,
       ...(list.search !== undefined ? { search: list.search } : {}),
@@ -360,24 +461,37 @@ export class CryptoConsole {
   }
 
   async getKey(ctx: HttpContext) {
-    const principal = await this.#principal(ctx);
+    const { service, principal } = await this.#reader(ctx);
     return ctx.response
       .header('cache-control', 'no-store')
       .json(
-        await this.options.service.getKey(
-          principal,
-          String((ctx.params as Record<string, string>).name ?? ''),
-        ),
+        await service.getKey(principal, String((ctx.params as Record<string, string>).name ?? '')),
       );
   }
 
   async createKey(ctx: HttpContext) {
-    const principal = await this.#principal(ctx);
     const body = this.#body(ctx);
     if (typeof body.name !== 'string' || body.name === '') {
       throw new HttpError(400, 'name is required');
     }
     const type = body.type as CryptoKeyType;
+    const federated = await this.#federated(ctx);
+    if (federated) {
+      const created = await federated.createKey(
+        {
+          name: body.name,
+          type,
+          ...(typeof body.description === 'string' ? { description: body.description } : {}),
+          ...(typeof body.deletionAllowed === 'boolean'
+            ? { deletionAllowed: body.deletionAllowed }
+            : {}),
+          ...(typeof body.exportable === 'boolean' ? { exportable: body.exportable } : {}),
+        },
+        await this.#commandMeta(ctx),
+      );
+      return ctx.response.status(201).json(created);
+    }
+    const principal = await this.#principal(ctx);
     const created = await this.options.service.createKey(principal, {
       name: body.name,
       type,
@@ -393,55 +507,98 @@ export class CryptoConsole {
   }
 
   async rotateKey(ctx: HttpContext) {
+    const name = String((ctx.params as Record<string, string>).name ?? '');
+    const federated = await this.#federated(ctx);
+    if (federated) {
+      return ctx.response.json(await federated.rotateKey(name, await this.#commandMeta(ctx)));
+    }
+    const principal = await this.#principal(ctx);
+    return ctx.response.json(await this.options.service.rotateKey(principal, name));
+  }
+
+  /**
+   * Exercise a key with a random probe (encrypt + decrypt, sign + verify, or HMAC): whether it
+   * round-trips, never the probe, the ciphertext or the signature. Audited like any operation.
+   */
+  async testKey(ctx: HttpContext) {
+    const name = String((ctx.params as Record<string, string>).name ?? '');
+    const federated = await this.#federated(ctx);
+    if (federated) {
+      return ctx.response.json(await federated.testKey(name, await this.#commandMeta(ctx)));
+    }
+    const principal = await this.#principal(ctx);
+    return ctx.response.json(await testKey(this.options.service, principal, name));
+  }
+
+  /** Re-encrypt a ciphertext under the key's latest version (the plaintext stays inside). */
+  async rewrap(ctx: HttpContext) {
+    const name = String((ctx.params as Record<string, string>).name ?? '');
+    const body = this.#body(ctx);
+    if (typeof body.ciphertext !== 'string' || body.ciphertext === '') {
+      throw new HttpError(400, 'ciphertext is required');
+    }
+    const input = {
+      ciphertext: body.ciphertext,
+      ...(typeof body.aad === 'string' ? { aad: body.aad } : {}),
+    };
+    const federated = await this.#federated(ctx);
+    if (federated) {
+      return ctx.response.json(await federated.rewrap(name, input, await this.#commandMeta(ctx)));
+    }
     const principal = await this.#principal(ctx);
     return ctx.response.json(
-      await this.options.service.rotateKey(
-        principal,
-        String((ctx.params as Record<string, string>).name ?? ''),
-      ),
+      await this.options.service.rewrap(principal, { key: name, ...input, context: 'console' }),
     );
   }
 
   async updateKey(ctx: HttpContext) {
-    const principal = await this.#principal(ctx);
     const body = this.#body(ctx);
+    const name = String((ctx.params as Record<string, string>).name ?? '');
+    const federated = await this.#federated(ctx);
+    if (federated) {
+      const patch = Object.fromEntries(
+        ['description', 'minDecryptionVersion', 'deletionAllowed', 'exportable']
+          .filter((field) => body[field] !== undefined)
+          .map((field) => [field, body[field]]),
+      );
+      return ctx.response.json(
+        await federated.updateKeyPolicy(name, patch, await this.#commandMeta(ctx)),
+      );
+    }
+    const principal = await this.#principal(ctx);
     return ctx.response.json(
-      await this.options.service.updateKeyPolicy(
-        principal,
-        String((ctx.params as Record<string, string>).name ?? ''),
-        {
-          ...(body.description === null || typeof body.description === 'string'
-            ? { description: body.description as string | null }
-            : {}),
-          ...(typeof body.minDecryptionVersion === 'number'
-            ? { minDecryptionVersion: body.minDecryptionVersion }
-            : {}),
-          ...(typeof body.deletionAllowed === 'boolean'
-            ? { deletionAllowed: body.deletionAllowed }
-            : {}),
-          ...(typeof body.exportable === 'boolean' ? { exportable: body.exportable } : {}),
-        },
-      ),
+      await this.options.service.updateKeyPolicy(principal, name, {
+        ...(body.description === null || typeof body.description === 'string'
+          ? { description: body.description as string | null }
+          : {}),
+        ...(typeof body.minDecryptionVersion === 'number'
+          ? { minDecryptionVersion: body.minDecryptionVersion }
+          : {}),
+        ...(typeof body.deletionAllowed === 'boolean'
+          ? { deletionAllowed: body.deletionAllowed }
+          : {}),
+        ...(typeof body.exportable === 'boolean' ? { exportable: body.exportable } : {}),
+      }),
     );
   }
 
   async deleteKey(ctx: HttpContext) {
+    const name = String((ctx.params as Record<string, string>).name ?? '');
+    const federated = await this.#federated(ctx);
+    if (federated) {
+      return ctx.response.json(await federated.deleteKey(name, await this.#commandMeta(ctx)));
+    }
     const principal = await this.#principal(ctx);
-    return ctx.response.json(
-      await this.options.service.deleteKey(
-        principal,
-        String((ctx.params as Record<string, string>).name ?? ''),
-      ),
-    );
+    return ctx.response.json(await this.options.service.deleteKey(principal, name));
   }
 
   async audit(ctx: HttpContext) {
-    const principal = await this.#principal(ctx);
+    const { service, principal } = await this.#reader(ctx);
     const request = parseAuditRequest(ctx.request.qs() as Record<string, unknown>);
     return ctx.response.json(
       request.cursor
-        ? await this.options.service.auditCursor(principal, request)
-        : await this.options.service.audit(principal, request),
+        ? await service.auditCursor(principal, request)
+        : await service.audit(principal, request),
     );
   }
 
