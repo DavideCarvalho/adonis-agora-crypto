@@ -118,6 +118,20 @@ async function pickCombo(label: string, text: string, option: string | RegExp = 
   });
 }
 
+/** Opens the topbar's App menu (the kit's ScopeMenu), searches, and picks an app. */
+async function pickApp(text: string, option: string) {
+  fireEvent.click(appButton());
+  fireEvent.change(await screen.findByRole('combobox', { name: 'Search apps' }), {
+    target: { value: text },
+  });
+  await act(async () => {
+    fireEvent.mouseDown(await screen.findByRole('option', { name: option }));
+    await new Promise((r) => setTimeout(r, 20));
+  });
+}
+
+const appButton = () => screen.getByRole('button', { name: /^App/ });
+
 const lastQuery = (path: string) =>
   new URL(urls.filter((u) => u.includes(path)).at(-1) ?? '/', 'http://x').searchParams;
 
@@ -130,9 +144,7 @@ describe('the crypto console: view state in the URL', () => {
     expect(query.get('partition')).toBe('billing');
     expect(query.get('search')).toBe('pay');
     expect(query.get('page')).toBe('2');
-    expect((screen.getByRole('combobox', { name: 'app' }) as HTMLInputElement).value).toBe(
-      'billing',
-    );
+    expect(appButton().textContent).toContain('billing');
     expect((screen.getByLabelText('Search keys') as HTMLInputElement).value).toBe('pay');
   });
 
@@ -159,7 +171,7 @@ describe('the crypto console: view state in the URL', () => {
     window.history.replaceState(null, '', '/crypto#/keys');
     renderApp();
     await screen.findByText('key-p1');
-    await pickCombo('app', 'bil', 'billing');
+    await pickApp('bil', 'billing');
     await waitFor(() => expect(window.location.hash).toBe('#/keys?app=billing'));
     await waitFor(() => expect(lastQuery('/keys').get('partition')).toBe('billing'));
 
@@ -171,7 +183,7 @@ describe('the crypto console: view state in the URL', () => {
     await waitFor(() => expect(lastQuery('/audit').get('filter[operation]')).toBe('decrypt'));
     expect(lastQuery('/audit').get('partition')).toBe('billing');
 
-    await pickCombo('app', 'sho', 'shop');
+    await pickApp('sho', 'shop');
     await waitFor(() => expect(window.location.hash).toBe('#/audit?operation=decrypt'));
   });
 

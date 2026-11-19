@@ -4,12 +4,13 @@ import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react
 import {
   ActivityIcon,
   AppShell,
-  ComboSelect,
   DocumentIcon,
   ErrorBoundary,
   NuqsHashAdapter,
   PageBody,
   readShellConfig,
+  ScopeChip,
+  ScopeMenu,
   ServerIcon,
   splitHash,
   subscribeHashUrl,
@@ -100,7 +101,18 @@ function LogoMark() {
   );
 }
 
-/** The topbar's app picker: a select with autocomplete over `/meta`'s apps. */
+const APP_TEXT = {
+  noun: 'App',
+  all: 'All apps',
+  some: 'Pick an app',
+  search: 'Search apps',
+  empty: 'No apps.',
+};
+
+/**
+ * The topbar's app picker, the kit's header picker over `/meta`'s apps: a fixed chip when there is
+ * only one app, a searchable menu otherwise. One app is always picked (no "all apps").
+ */
 function AppPicker({
   value,
   options,
@@ -110,24 +122,18 @@ function AppPicker({
   options: readonly string[];
   onChange: (value: string) => void;
 }) {
+  if (options.length <= 1) return <ScopeChip noun={APP_TEXT.noun} label={value} kind="app" />;
   return (
-    <label
-      htmlFor="crypto-app-picker"
-      className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.08em] text-faint"
-    >
-      app
-      <ComboSelect
-        id="crypto-app-picker"
-        aria-label="app"
-        className="h-7 w-40 font-normal normal-case tracking-normal text-[11.5px]"
-        options={options}
-        value={value}
-        clearable={false}
-        onValueChange={(next) => {
-          if (next !== null && next !== value) onChange(next);
-        }}
-      />
-    </label>
+    <ScopeMenu
+      items={options.map((id) => ({ id, label: id }))}
+      all={false}
+      current={value}
+      text={APP_TEXT}
+      labelOf={(id) => id}
+      onChoose={(next) => {
+        if (next !== undefined) onChange(next);
+      }}
+    />
   );
 }
 
