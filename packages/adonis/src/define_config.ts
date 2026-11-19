@@ -10,6 +10,7 @@ import type {
   TenantTokenSource,
 } from '@adonis-agora/crypto-core';
 import type { CryptoKeyringConfig } from './crypto/keyring.js';
+import { describeStackUse, hasLucidConnection, lucidUse, type StackUse } from './stack.js';
 import { LucidStore } from './store/lucid_store.js';
 import { MemoryStore } from './store/memory_store.js';
 import type { DataKeyCacheOptions } from './subjects/cache.js';
@@ -35,10 +36,13 @@ export type Factory<T> = (context: FactoryContext) => T | Promise<T>;
 export const stores = {
   /** Keys and the audit trail in your database (Postgres, MySQL, SQLite). The default. */
   lucid(options: { connection?: string; autoCreateSchema?: boolean } = {}): Factory<CryptoStore> {
-    return async (context) =>
-      new LucidStore(await context.db(options.connection), {
-        autoCreateSchema: options.autoCreateSchema ?? context.autoCreateSchema,
-      });
+    return describeStackUse(
+      async (context: FactoryContext) =>
+        new LucidStore(await context.db(options.connection), {
+          autoCreateSchema: options.autoCreateSchema ?? context.autoCreateSchema,
+        }),
+      () => lucidUse(options.connection, 'keys'),
+    );
   },
   /** In process memory: tests and local development (key material is still sealed). */
   memory(): Factory<CryptoStore> {
@@ -52,15 +56,18 @@ export const dataKeyStores = {
   lucid(
     options: { connection?: string; autoCreateSchema?: boolean; schema?: string } = {},
   ): Factory<DataKeyStore> {
-    return async (context) =>
-      new LucidDataKeyStore(
-        context.dbResolver
-          ? await context.dbResolver(options.connection, options.schema)
-          : await context.db(options.connection, options.schema),
-        {
-          autoCreateSchema: options.autoCreateSchema ?? context.autoCreateSchema,
-        },
-      );
+    return describeStackUse(
+      async (context: FactoryContext) =>
+        new LucidDataKeyStore(
+          context.dbResolver
+            ? await context.dbResolver(options.connection, options.schema)
+            : await context.db(options.connection, options.schema),
+          {
+            autoCreateSchema: options.autoCreateSchema ?? context.autoCreateSchema,
+          },
+        ),
+      () => lucidUse(options.connection, 'data keys'),
+    );
   },
   /** In process memory: tests and local development. */
   memory(): Factory<DataKeyStore> {
@@ -274,5 +281,17 @@ export function defineConfig(config: CryptoConfig): CryptoConfig {
   if ((config.topology ?? 'standalone') === 'standalone' && !('app' in config && config.app)) {
     throw new Error('crypto: `app` is required on a standalone app');
   }
-  return config;
+  return describeStackUse(config, () => defaultStackUses(config));
+}
+
+/**
+ * What the omitted options fall back to: keys and the audit trail on the default Lucid connection
+ * (server topologies), and subjects' data keys there too. Explicit factories describe themselves.
+ */
+export function defaultStackUses(config: CryptoConfig): StackUse[] {
+  if (!hasLucidConnection()) return [];
+  const uses: StackUse[] = [];
+  if (config.topology !== 'tenant' && !config.store) uses.push(lucidUse(undefined, 'keys'));
+  if (config.subjects && !config.subjects.store) uses.push(lucidUse(undefined, 'data keys'));
+  return uses;
 }

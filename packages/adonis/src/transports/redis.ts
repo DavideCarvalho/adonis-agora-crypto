@@ -3,6 +3,7 @@ import {
   TransportError,
   type TransportReplyMessage,
 } from '@adonis-agora/crypto-core';
+import { describeStackUse, redisConnectionName, redisUse } from '../stack.js';
 import type { BrokerDriver } from './broker.js';
 
 /** The slice of `@adonisjs/redis` (ioredis) a call channel needs. */
@@ -36,6 +37,14 @@ const keys = (prefix: string) => ({
  * travels on every message and `verifyTenant` runs on each.
  */
 export function redisTransport(options: RedisTransportOptions): BrokerDriver {
+  // An `@adonisjs/redis` connection names itself; a bare client says nothing truthful.
+  return describeStackUse(buildRedisTransport(options), () => {
+    const name = redisConnectionName(options.connection);
+    return name ? redisUse(name, 'tenant link') : undefined;
+  });
+}
+
+function buildRedisTransport(options: RedisTransportOptions): BrokerDriver {
   const prefix = options.prefix ?? 'crypto';
   const k = keys(prefix);
   const timeoutMs = options.timeoutMs ?? 10_000;
