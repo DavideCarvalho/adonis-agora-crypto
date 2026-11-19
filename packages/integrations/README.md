@@ -9,6 +9,7 @@ or `{ service, partition }` (the server embedded in the app).
 | `@adonis-agora/crypto-integrations/authkit` | KMS root for authkit-server (`crypto.kms`) + doctor check | `authkit-root` |
 | `…/agent` | KMS root for agent's poppy connections + doctor check | `agent-poppy-root` |
 | `…/config` | KMS root for the config control plane + doctor check | `config-root` |
+| `…/collaboration` | storage `codec` for `@adonis-agora/collaboration` (encryption at rest) | subject keys, or you name it |
 | `…/durable` | `encryptedTransport` / `encryptedControlPlane` decorators | `durable-tasks` (you name it) |
 | `…/flags` | envelope `fetch` for `transports.http` and the posthog/clickhouse sinks | `flags-events` |
 | `…/http` | envelope `fetch` for any call (authkit token, config tenant, …) + middleware re-exports | you name it |

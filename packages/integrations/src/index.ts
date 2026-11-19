@@ -7,6 +7,19 @@ export {
   sealedOpenEvent,
 } from './audit.js';
 export {
+  COLLABORATION_ENVELOPE_PREFIX,
+  type CollaborationCodec,
+  type CollaborationCodecContext,
+  type CollaborationCodecOptions,
+  type CollaborationCodecValue,
+  type CollaborationSubjectRef,
+  collaborationAad,
+  collaborationCodec,
+  type KeyCodecOptions,
+  type SubjectCipher,
+  type SubjectCodecOptions,
+} from './collaboration.js';
+export {
   type ControlPlaneLike,
   type DurableEncryptionOptions,
   encryptedControlPlane,

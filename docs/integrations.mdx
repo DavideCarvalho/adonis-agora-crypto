@@ -1,6 +1,6 @@
 ---
 title: Integrations
-description: The 0.x package that plugs @adonis-agora/crypto into authkit, agent, config, durable, flags and any HTTP call — without touching the rc libs.
+description: The 0.x package that plugs @adonis-agora/crypto into authkit, agent, config, durable, flags, collaboration and any HTTP call — without touching the rc libs.
 icon: Plug
 ---
 
@@ -121,6 +121,66 @@ without `encryptedTransport` receives `{ agoraSealed }` instead of `input`.
 
 `strict: true` makes the receiver refuse a plain payload instead of passing it through (use it once
 the whole fleet is upgraded; during a rollout the default passes plain values untouched).
+
+## collaboration — `/collaboration`
+
+`collaborationCodec` is a storage codec for `@adonis-agora/collaboration`: document state, version
+snapshots, comment bodies and anchors of the matched documents are encrypted before they reach the
+database; the server keeps working on plaintext in memory.
+
+With **subject keys** (`crypto.subjects`), each document is sealed with its owner's key, so
+forgetting the subject shreds their documents too:
+
+```ts title="config/collaboration.ts"
+import { defineConfig, lucidStorage } from '@adonis-agora/collaboration'
+import crypto from '@adonis-agora/crypto/services/main'
+import { collaborationCodec } from '@adonis-agora/crypto-integrations/collaboration'
+
+export default defineConfig({
+  engine: 'yjs',
+  storage: lucidStorage({
+    connection: 'primary',
+    codec: collaborationCodec({
+      // only the thesis is encrypted; whiteboards pass through untouched
+      docs: /^projects\/([^/]+)\/writing$/,
+      subjects: () => crypto.subjects,
+      subject: async ([, projectId]) => ({ type: 'researcher', id: await ownerOf(projectId) }),
+    }),
+  }),
+})
+```
+
+With a **named key** on the crypto server instead:
+
+```ts
+codec: collaborationCodec({
+  source: { client: crypto },        // or { service, partition } when embedded
+  key: 'collab-docs',                // or (match, ctx) => a key per document
+})
+```
+
+| Option | Default | |
+| --- | --- | --- |
+| `docs` | every document | a `RegExp` on `docName` (its match goes to `subject`/`key`), or `(docName) => match \| null` |
+| `subjects` + `subject` | — | per-subject keys; `subject(match, ctx)` returns the subject (may be async) |
+| `source` + `key` | — | a named key; `key` may be a function of `(match, ctx)` |
+| `aad` | `["agora:collab", docName, kind, field, versionId ?? commentId ?? null]` | binds a value to its row and column |
+| `envelope` | `false` | named key only, see below |
+
+Binary values (`state`, `snapshot`) are base64'd and sealed; the stored value is the ciphertext
+string. A value that does not open (wrong key, moved to another row, tampered) throws, and the
+collaboration storage then refuses to overwrite that document. Rows written before the codec was
+configured are read as plaintext and encrypted on their next save, or all at once with
+`node ace collaboration:reencode`.
+
+### Envelope mode
+
+Large Yjs states sent to a remote crypto server cost a round trip and the payload on every save.
+`envelope: true` (or `{ ttlMs, maxEntries }`, default 5 minutes / 500 documents) seals locally with
+AES-256-GCM under a data key per document; the data key is wrapped by `key` on the server once per
+document and `ttlMs`, and travels in the value (`agora:ce1:…`). Both formats always open, so
+the option can be turned on or off without touching stored rows. Subject keys already work this way
+and do not take the option.
 
 ## flags — `/flags`
 
