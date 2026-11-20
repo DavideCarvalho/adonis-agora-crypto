@@ -136,8 +136,7 @@ router
 
 The middleware decrypts before the controller runs and **replaces the request body**, so
 `request.body()`, `request.all()` and `request.validateUsing()` read the payload with no controller
-change. It also exposes the opened state on `ctx.agora.envelope` (`{ key, issuedAt, payload }`);
-`ctx.cryptoEnvelope` remains as a deprecated alias.
+change. It also exposes the opened state on `ctx.agora.envelope` (`{ key, issuedAt, payload }`).
 
 On a tenant (`topology: 'tenant'`) the middleware takes the client instead of the service:
 

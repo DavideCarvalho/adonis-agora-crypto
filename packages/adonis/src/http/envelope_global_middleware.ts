@@ -95,7 +95,7 @@ export default class CryptoEnvelopeInboundMiddleware {
     }
 
     // `updateBody` is what `body()`/`all()`/`validateUsing()` read. Adonis spreads the value, so only
-    // an object can be a body; an array or scalar stays available on `ctx.cryptoEnvelope.payload`.
+    // an object can be a body; an array or scalar stays available on `ctx.agora.envelope.payload`.
     const body =
       payload !== null && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
     request.updateBody?.(body);

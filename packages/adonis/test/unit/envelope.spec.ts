@@ -83,7 +83,7 @@ function context(input: { headers?: Record<string, string>; body?: unknown } = {
   const ctx = { request, response } as unknown as {
     request: typeof request;
     response: typeof response;
-    cryptoEnvelope?: unknown;
+    agora?: { envelope?: unknown };
   };
   state.all = request.all();
   void body;
@@ -117,7 +117,9 @@ describe('envelope middleware', () => {
     expect(state.status).toBe(200);
     expect(state.body).toEqual({ paciente: 'p-1', exame: 'hemograma' });
     expect(state.all).toMatchObject({ paciente: 'p-1' });
-    expect((ctx as { cryptoEnvelope?: { payload: unknown } }).cryptoEnvelope?.payload).toEqual({
+    expect(
+      (ctx as { agora?: { envelope?: { payload: unknown } } }).agora?.envelope?.payload,
+    ).toEqual({
       paciente: 'p-1',
       exame: 'hemograma',
     });
