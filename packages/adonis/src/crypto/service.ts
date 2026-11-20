@@ -561,6 +561,8 @@ export class CryptoService {
           exportable: input.exportable ?? false,
           createdAt: now,
           createdBy: principal.actor,
+          updatedAt: now,
+          updatedBy: principal.actor,
         };
         await this.store.createKey(record, {
           partition: principal.partition,

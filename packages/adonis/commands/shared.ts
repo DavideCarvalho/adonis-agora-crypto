@@ -75,7 +75,16 @@ export abstract class CryptoCommand extends BaseCommand {
 
   protected printKeys(keys: readonly CryptoKeyView[]): void {
     const table = this.ui.table();
-    table.head(['Key', 'Type', 'Version', 'Min version', 'Deletable', 'Exportable', 'Deleted']);
+    table.head([
+      'Key',
+      'Type',
+      'Version',
+      'Min version',
+      'Deletable',
+      'Exportable',
+      'Updated',
+      'Deleted',
+    ]);
     for (const key of keys) {
       table.row([
         key.name,
@@ -84,6 +93,7 @@ export abstract class CryptoCommand extends BaseCommand {
         `v${key.minDecryptionVersion}`,
         key.deletionAllowed ? 'yes' : '',
         key.exportable ? 'yes' : '',
+        key.updatedAt ?? '',
         key.deletedAt ?? '',
       ]);
     }
@@ -111,6 +121,8 @@ export abstract class CryptoCommand extends BaseCommand {
     policy.row(['deletionAllowed', key.deletionAllowed ? 'yes' : 'no']);
     policy.row(['exportable', key.exportable ? 'yes' : 'no']);
     if (key.description !== undefined) policy.row(['description', key.description]);
+    policy.row(['createdAt', `${key.createdAt} by ${key.createdBy}`]);
+    policy.row(['updatedAt', key.updatedAt ? `${key.updatedAt} by ${key.updatedBy ?? '—'}` : '—']);
     if (key.deletedAt !== undefined) policy.row(['deletedAt', key.deletedAt]);
     policy.render();
   }

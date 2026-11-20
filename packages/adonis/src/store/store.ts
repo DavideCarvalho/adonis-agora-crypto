@@ -15,8 +15,13 @@ export interface CryptoKeyRecord {
   minDecryptionVersion: number;
   deletionAllowed: boolean;
   exportable: boolean;
+  /** ISO 8601. Set on insert, never changes. */
   createdAt: string;
   createdBy: string;
+  /**
+   * ISO 8601. Set on insert (equal to `createdAt`) and on every change: rotation, policy, delete.
+   * Absent on keys created before 1.0 that were never changed since.
+   */
   updatedAt?: string;
   updatedBy?: string;
   /** Set by a delete: the name stays reserved and no operation is served any more. */

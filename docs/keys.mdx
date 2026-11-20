@@ -35,6 +35,13 @@ await crypto.keys.create({ name: 'media', type: 'aes256-gcm', description: 'medi
 A key starts with version 1, `minDecryptionVersion: 1`, `deletionAllowed: false` and
 `exportable: false`. The name is reserved forever: deleting a key does not free it.
 
+Every key carries `createdAt` / `createdBy` and `updatedAt` / `updatedBy` (ISO 8601 strings). A new
+key has `updatedAt` equal to `createdAt`; a rotation, a policy change or a delete moves `updatedAt`,
+never `createdAt`. A key created before these fields existed and never changed since has no
+`updatedAt` (the console shows `—`). Each version has its own `createdAt` / `createdBy`: versions
+are never edited, so they have no `updatedAt`. The audit trail is append-only too: each event has
+its `at`.
+
 ## Versions and rotation
 
 ```sh
