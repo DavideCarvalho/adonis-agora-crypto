@@ -31,21 +31,15 @@ declare module '@adonisjs/core/http' {
   /* The shape authkit-client declares: the same `AgoraRequestContext`, the same property type. */
   interface HttpContext {
     agora: AgoraRequestContext;
-    /** @deprecated read `ctx.agora.envelope` — kept so the first route-middleware adopters keep working. */
-    cryptoEnvelope?: CryptoEnvelopeState;
   }
 }
 
-/** Publishes the opened envelope on the shared request context (and the deprecated alias). */
+/** Publishes the opened envelope on the shared request context (`ctx.agora.envelope`). */
 export function setEnvelopeState(ctx: HttpContext, state: CryptoEnvelopeState): void {
-  const context = ctx as unknown as {
-    agora?: { envelope?: CryptoEnvelopeState };
-    cryptoEnvelope?: CryptoEnvelopeState;
-  };
+  const context = ctx as unknown as { agora?: { envelope?: CryptoEnvelopeState } };
   // `agora` is normally created by the first lib that needs it; never assume we are the first.
   context.agora ??= {};
   context.agora.envelope = state;
-  context.cryptoEnvelope = state;
 }
 
 export interface CryptoEnvelopeMiddlewareOptions {
