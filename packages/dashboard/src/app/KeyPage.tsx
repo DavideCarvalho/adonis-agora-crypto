@@ -188,14 +188,12 @@ export function KeyPage({ name, onBack }: { name: string; onBack: () => void }) 
                   <dd className="text-fg">
                     {exactTime(data.createdAt)} by {data.createdBy}
                   </dd>
-                  {data.updatedAt ? (
-                    <>
-                      <dt className="text-faint">Updated</dt>
-                      <dd className="text-fg">
-                        {exactTime(data.updatedAt)} by {data.updatedBy ?? '—'}
-                      </dd>
-                    </>
-                  ) : null}
+                  <dt className="text-faint">Updated</dt>
+                  <dd className="text-fg">
+                    {data.updatedAt
+                      ? `${exactTime(data.updatedAt)} by ${data.updatedBy ?? '—'}`
+                      : '—'}
+                  </dd>
                   {data.deletedAt ? (
                     <>
                       <dt className="text-faint">Deleted</dt>

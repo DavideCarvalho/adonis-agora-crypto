@@ -9,6 +9,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { CryptoService } from '../../src/crypto/service.js';
 import { type SqlDatabase } from '../../src/sql.js';
 import { LucidStore } from '../../src/store/lucid_store.js';
+import { MemoryStore } from '../../src/store/memory_store.js';
+import { type CryptoStore } from '../../src/store/store.js';
 import { testKeyring } from '../../src/testing/index.js';
 
 const closers: Array<() => Promise<void>> = [];
@@ -159,5 +161,44 @@ describe('LucidStore', () => {
     );
     expect(await (crypto.store as LucidStore).partitions()).toEqual(['billing', 'shop']);
     expect((await crypto.listKeys(principal, { page: 1, size: 10 })).meta.total).toBe(1);
+  });
+});
+
+describe.each([
+  ['LucidStore', async (): Promise<CryptoStore> => new LucidStore(await sqlite())],
+  ['MemoryStore', async (): Promise<CryptoStore> => new MemoryStore()],
+])('%s timestamps', (_name, make) => {
+  it('sets createdAt and updatedAt on create; updates move updatedAt only', async () => {
+    const store = await make();
+    await store.setup?.();
+    let clock = '2026-01-01T00:00:00.000Z';
+    const crypto = new CryptoService({ store, keyring: testKeyring(), now: () => clock });
+
+    const created = await crypto.createKey(principal, { name: 'orders', type: 'aes256-gcm' });
+    expect(created.createdAt).toBe('2026-01-01T00:00:00.000Z');
+    expect(created.updatedAt).toBe('2026-01-01T00:00:00.000Z');
+    expect(created.updatedBy).toBe('test');
+
+    clock = '2026-02-01T00:00:00.000Z';
+    const rotated = await crypto.rotateKey(principal, 'orders');
+    expect(rotated.createdAt).toBe('2026-01-01T00:00:00.000Z');
+    expect(rotated.updatedAt).toBe('2026-02-01T00:00:00.000Z');
+    // Versions are append-only: each keeps its own createdAt and has no updatedAt.
+    expect(rotated.versions.map((version) => version.createdAt)).toEqual([
+      '2026-01-01T00:00:00.000Z',
+      '2026-02-01T00:00:00.000Z',
+    ]);
+    expect(rotated.versions[0]).not.toHaveProperty('updatedAt');
+
+    clock = '2026-03-01T00:00:00.000Z';
+    const changed = await crypto.updateKeyPolicy(principal, 'orders', { exportable: true });
+    expect(changed.createdAt).toBe('2026-01-01T00:00:00.000Z');
+    expect(changed.updatedAt).toBe('2026-03-01T00:00:00.000Z');
+
+    const listed = await store.getKey('shop', 'orders');
+    expect(listed).toMatchObject({
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-03-01T00:00:00.000Z',
+    });
   });
 });

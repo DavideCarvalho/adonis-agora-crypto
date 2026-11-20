@@ -85,7 +85,11 @@ export class MemoryStore implements CryptoStore {
   async createKey(key: CryptoKeyRecord, version: CryptoKeyVersionRecord): Promise<void> {
     const id = slot(key.partition, key.name);
     if (this.#keys.has(id)) throw new Error(`crypto: key "${key.name}" already exists`);
-    this.#keys.set(id, { ...key });
+    this.#keys.set(id, {
+      ...key,
+      updatedAt: key.updatedAt ?? key.createdAt,
+      updatedBy: key.updatedBy ?? key.createdBy,
+    });
     this.#versions.set(id, [{ ...version }]);
   }
 

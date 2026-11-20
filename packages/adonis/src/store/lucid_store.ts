@@ -276,8 +276,8 @@ export class LucidStore implements CryptoStore {
       await query(
         trx,
         `INSERT INTO crypto_keys
-         (app, name, type, description, latest_version, min_decryption_version, deletion_allowed, exportable, created_at, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (app, name, type, description, latest_version, min_decryption_version, deletion_allowed, exportable, created_at, created_by, updated_at, updated_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           key.partition,
           key.name,
@@ -289,6 +289,9 @@ export class LucidStore implements CryptoStore {
           key.exportable ? 1 : 0,
           key.createdAt,
           key.createdBy,
+          // A new key is as fresh as it is old: `updated_at` starts at `created_at`.
+          key.updatedAt ?? key.createdAt,
+          key.updatedBy ?? key.createdBy,
         ],
       );
       await query(

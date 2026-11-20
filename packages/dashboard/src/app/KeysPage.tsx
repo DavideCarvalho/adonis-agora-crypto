@@ -17,7 +17,7 @@ import { Input } from '../agora-kit/ui/input';
 import { Skeleton } from '../agora-kit/ui/skeleton';
 import type { Key, KeyType } from '../client/crypto-client';
 import { useConsole } from './console-context';
-import { relativeTime } from './format';
+import { exactTime, relativeTime } from './format';
 
 const TYPES: KeyType[] = ['aes256-gcm', 'x25519', 'ed25519', 'hmac-sha256'];
 
@@ -163,7 +163,7 @@ export function KeysPage({ onOpen }: { onOpen: (name: string) => void }) {
       header: 'Created',
       hideBelow: 'lg',
       cell: (key) => (
-        <span className="text-[11px] text-faint">
+        <span className="text-[11px] text-faint" title={exactTime(key.createdAt)}>
           {relativeTime(key.createdAt)} by {key.createdBy}
         </span>
       ),

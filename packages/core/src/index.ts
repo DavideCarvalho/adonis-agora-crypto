@@ -190,8 +190,13 @@ export interface CryptoKeyView {
   minDecryptionVersion: number;
   deletionAllowed: boolean;
   exportable: boolean;
+  /** ISO 8601: when the key was created. */
   createdAt: string;
   createdBy: string;
+  /**
+   * ISO 8601: the last change (rotation, policy, delete). Equal to `createdAt` on a new key; absent
+   * on a key created before 1.0 and never changed since.
+   */
   updatedAt?: string;
   updatedBy?: string;
   /** Set once the key was deleted; a deleted key no longer serves operations. */
