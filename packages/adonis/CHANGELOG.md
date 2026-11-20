@@ -1,5 +1,21 @@
 # @adonis-agora/crypto
 
+## 1.0.0-rc.1
+
+### Minor Changes
+
+- [#41](https://github.com/DavideCarvalho/adonis-agora-crypto/pull/41) [`c88b503`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/c88b503985d874a571c52ba5ee10b05ea32c50a7) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Keys now carry `updatedAt` / `updatedBy` from the moment they are created (equal to `createdAt` /
+  `createdBy`), so every key shows both timestamps; rotations, policy changes and deletes keep moving
+  `updatedAt`. Key versions and the audit trail stay append-only (`createdAt` / `at` only). The
+  console's key detail always shows Created and Updated (`—` when a key never recorded one), the key
+  list's Created cell carries the full timestamp in its tooltip, and `crypto:keys:list` /
+  `crypto:keys:show` print the timestamps too. No schema change: the columns already existed.
+
+### Patch Changes
+
+- Updated dependencies [[`c88b503`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/c88b503985d874a571c52ba5ee10b05ea32c50a7)]:
+  - @adonis-agora/crypto-core@1.0.0-rc.1
+
 ## 1.0.0-rc.0
 
 ### Major Changes
