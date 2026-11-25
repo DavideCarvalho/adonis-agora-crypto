@@ -1,5 +1,11 @@
 # @adonis-agora/crypto
 
+## 1.0.0-rc.2
+
+### Patch Changes
+
+- [#42](https://github.com/DavideCarvalho/adonis-agora-crypto/pull/42) [`0107d43`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/0107d43c1f3d1ad1259dc39db22a104324e914de) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Security: list endpoints reject `__proto__`, `constructor` and `prototype` as `filter[...]` names and drop them as query keys, so a query string can't set the prototype of the parsed filter object.
+
 ## 1.0.0-rc.1
 
 ### Minor Changes
