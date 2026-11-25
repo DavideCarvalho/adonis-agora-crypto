@@ -26,16 +26,28 @@ export interface ListQueryOptions {
   maxSize?: number;
 }
 
-/** `{ 'filter[action]': 'set' }` → `{ filter: { action: 'set' } }`, the shape Adonis's `qs()` gives. */
+/** Names that would reach an object's prototype when used as a key. */
+const RESERVED_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
+
+/**
+ * `{ 'filter[action]': 'set' }` → `{ filter: { action: 'set' } }`, the shape Adonis's `qs()` gives.
+ * A `__proto__`, `constructor` or `prototype` key is dropped, or a 400 when it names a filter.
+ */
 function nest(query: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(query)) {
+    if (RESERVED_KEYS.has(key)) continue;
     const match = /^filter\[([^\]]+)\](?:\[([^\]]+)\])?$/.exec(key);
     if (!match) {
       out[key] = value;
       continue;
     }
     const [, field, operator] = match;
+    for (const name of [field!, operator]) {
+      if (name !== undefined && RESERVED_KEYS.has(name)) {
+        throw new InvalidColumnFilterError(`Unknown filter field "${field}"`);
+      }
+    }
     const filter = (out.filter as Record<string, unknown> | undefined) ?? {};
     if (operator === undefined) {
       filter[field!] = value;
