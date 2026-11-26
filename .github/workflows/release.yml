@@ -20,7 +20,7 @@ name: Release
 # publisher, and a new configuration expires after 2 days without a successful publish).
 on:
   push:
-    branches: [master]
+    branches: [master, release/0.x]
   workflow_dispatch:
 
 # Never run two releases of the same ref concurrently (avoids a double-publish race), and queue
