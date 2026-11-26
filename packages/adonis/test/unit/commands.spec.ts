@@ -15,6 +15,9 @@ import {
 import CryptoEncrypt, { CryptoAuditCommand, CryptoDecrypt } from '../../commands/ops.js';
 import { defineConfig, stores } from '../../src/define_config.js';
 
+import { CONSOLE_COMMAND_KEY, ensureConsoleCommandKey } from '../../src/federation/console.js';
+import type { CryptoRuntime } from '../../src/runtime.js';
+
 /** The crypto:* commands through the real ace kernel of a booted server. */
 describe('commands', () => {
   let app: ApplicationService;
@@ -118,6 +121,24 @@ describe('commands', () => {
     await run(CryptoKeysRotate as never, ['inbox', '--application', 'shop']);
     await run(CryptoKeysPublicKey as never, ['inbox', '--application', 'shop', '--jwks']);
     expect((JSON.parse(writes.join('')) as { keys: unknown[] }).keys).toHaveLength(2);
+  });
+
+  it('prints the console-commands key (token mode) the boot log names by a short id', async () => {
+    const runtime = (await app.container.make('agora.crypto')) as CryptoRuntime;
+    await ensureConsoleCommandKey(runtime.service!, 'shop');
+    await run(CryptoKeysPublicKey as never, [CONSOLE_COMMAND_KEY, '--application', 'shop']);
+    const jwk = JSON.parse(writes.join('')) as { kty: string; crv: string; x: string; kid: string };
+    expect(jwk).toMatchObject({ kty: 'OKP', crv: 'X25519' });
+    expect(jwk.kid).toBeTypeOf('string');
+    await run(CryptoKeysPublicKey as never, [
+      CONSOLE_COMMAND_KEY,
+      '--application',
+      'shop',
+      '--jwks',
+    ]);
+    expect((JSON.parse(writes.join('')) as { keys: Array<{ kid: string }> }).keys[0]?.kid).toBe(
+      jwk.kid,
+    );
   });
 
   it('refuses an unknown type before touching the store', async () => {

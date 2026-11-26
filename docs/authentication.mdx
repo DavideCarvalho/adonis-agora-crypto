@@ -95,6 +95,7 @@ used by an automation (`actor: 'agent:7'`).
 | `crypto:keys:read` | list keys, read metadata and versions, audit trail, public keys |
 | `crypto:keys:manage` | create, rotate, change policy, delete |
 | `crypto:keys:export` | export an `exportable` key's material |
+| `crypto:seal:<key>` | `encrypt` with `<key>` of **another** partition ([sealing for another partition](#sealing-for-another-partition)); never decrypt. Only an explicit grant counts: `crypto:*` does not |
 
 `*` matches one segment, and a trailing `*` matches everything after it:
 
@@ -105,7 +106,59 @@ used by an automation (`actor: 'agent:7'`).
 | `crypto:*:media` | every operation on `media` |
 
 Nothing is implied: `crypto:encrypt:media` cannot decrypt, and `crypto:keys:read` grants no
-operation.
+operation. In the key-name segment, a prefix ending in `*` matches key names starting with it:
+`crypto:decrypt:console-*` opens `console-crypto`, `console-flags`, … and nothing else.
+
+## Sealing for another partition
+
+A token's partition is the only one it touches, with one exception: `encrypt` may name another
+partition, so one app can write something only that other app can read. The Agora consoles use it
+to seal commands for the apps they manage (`console-<lib>` keys) when the crypto server is a
+separate app.
+
+```ts
+// The console's client: its token is for its own partition ("hub") and holds
+// crypto:seal:console-* (and nothing for entre-textos).
+const { ciphertext, partition } = await crypto.encrypt({
+  key: 'console-flags',
+  plaintext: command,
+  aad,
+  partition: 'entre-textos',
+})
+// entre-textos opens it with its own token: decrypting a console-* key of its own
+// partition needs no grant (see below).
+```
+
+- **Encrypt only.** Every other operation (`decrypt`, `rewrap`, `datakeys`, `sign`, `verify`,
+  `hmac`, keys, export) refuses a partition other than the token's (`403`).
+- **An explicit grant.** The caller's token needs `crypto:seal:<key>` (prefix wildcards work:
+  `crypto:seal:console-*`). `crypto:encrypt:<key>` and `crypto:*` are not enough, so a tenant with
+  every right over its own partition cannot forge ciphertext another app trusts.
+- **Audited where the key lives.** The `encrypt` row is written in the target partition, with the
+  caller's actor, its client id (or `partition:<caller>`) as the client and `metadata.sealedFrom`;
+  a refusal is written in the caller's partition.
+- **Apps open their own console keys.** A verified token for partition `P` may `decrypt` with any
+  key named `console-*` **in `P`** without a grant: implicit, decrypt only (never encrypt, manage,
+  rewrap or export), never another partition's, and nothing else widens (the token's explicit
+  capabilities still decide every other key). The seal grant stays explicit: it is what stops one
+  app forging commands to another.
+- **Console keys provision themselves.** When the key is missing in the target partition and its
+  name starts with `console-`, the server creates it there (`aes256-gcm`) and seals: the Agora
+  consoles' keys exist after the first command, with no `crypto:keys:manage` grant anywhere. Only
+  on this path, only for `console-*` names, only `aes256-gcm` (decrypt never creates). Two seals
+  at once create one key. The creation is audited in the target partition, with the sealing
+  caller as the actor and `metadata.provisionedBy: 'seal'`. Turn it off with
+  `sealProvisioning: false` in the server's `config/crypto.ts`.
+- **Clear failures.** Any other missing key (or a console key with `sealProvisioning: false`)
+  answers `404` with the exact `node ace crypto:keys:create <key> --type aes256-gcm --application
+  <partition>` to run.
+- **Older servers.** The result echoes `partition`; `CryptoClient` and the broker transport throw
+  a clear error ("upgrade @adonis-agora/crypto on the crypto server, or configure `crypto`
+  explicitly") when a server that predates the field ignored it, instead of returning a ciphertext
+  nobody can open.
+
+Same over HTTP (`POST /v1/encrypt` with `partition` in the body), the broker transports and the
+in-process service.
 
 ## Who is recorded
 

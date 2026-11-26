@@ -140,6 +140,8 @@ export type {
   AgoraDoctorStatus,
 } from './doctor/agora_doctor.js';
 export { agoraDoctorChecks } from './doctor/checks.js';
+/* The federated console's authentication: the boot error a misconfigured side throws. */
+export { ConsoleAuthConfigError } from './federation/console_modes.js';
 export { CryptoApi, type CryptoApiOptions, cryptoCsrfExceptions } from './http/api.js';
 export {
   type CryptoEnvelopeMiddlewareOptions,

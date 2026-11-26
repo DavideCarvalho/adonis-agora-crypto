@@ -32,9 +32,11 @@ const KEY = {
 
 const originalFetch = globalThis.fetch;
 let calls: Array<{ method: string; url: string }> = [];
+let meta: Meta = META;
 
 beforeEach(() => {
   calls = [];
+  meta = META;
   const data = document.createElement('script');
   data.id = 'crypto-dashboard-config';
   data.type = 'application/json';
@@ -44,7 +46,7 @@ beforeEach(() => {
     const url = String(input);
     calls.push({ method: init?.method ?? 'GET', url });
     const body = url.includes('/meta')
-      ? META
+      ? meta
       : url.includes('/test')
         ? {
             key: 'thesis',
@@ -116,5 +118,28 @@ describe('the federated crypto console', () => {
     expect(create[0]?.title).toMatch(/read-only here/);
     const rotate = screen.getByRole('button', { name: 'Rotate' }) as HTMLButtonElement;
     expect(rotate.disabled).toBe(true);
+  });
+
+  it('a viewer whose grant lacks crypto:keys:manage cannot change keys, but may still test them', async () => {
+    meta = { ...META, capabilities: ['crypto:keys:read', 'crypto:encrypt:*', 'crypto:decrypt:*'] };
+    window.history.replaceState(null, '', '/crypto#/keys?key=thesis');
+    renderApp();
+    await screen.findByRole('heading', { name: 'thesis' });
+    const rotate = screen.getByRole('button', { name: 'Rotate' }) as HTMLButtonElement;
+    expect(rotate.disabled).toBe(true);
+    expect(rotate.title).toMatch(/needs crypto:keys:manage/);
+    expect((screen.getByRole('button', { name: 'Test' }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+  });
+
+  it('a read-only viewer cannot test a key either', async () => {
+    meta = { ...META, capabilities: ['crypto:keys:read'] };
+    window.history.replaceState(null, '', '/crypto#/keys?key=thesis');
+    renderApp();
+    await screen.findByRole('heading', { name: 'thesis' });
+    const test = screen.getByRole('button', { name: 'Test' }) as HTMLButtonElement;
+    expect(test.disabled).toBe(true);
+    expect(test.title).toMatch(/needs crypto:encrypt:thesis/);
   });
 });

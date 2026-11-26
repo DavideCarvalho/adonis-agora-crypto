@@ -10,7 +10,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { CryptoService } from '../../src/crypto/service.js';
 import { CryptoConsole } from '../../src/dashboard/console.js';
 import { resolveDashboardConfig } from '../../src/dashboard/define_config.js';
-import { cryptoConsoleCommandHandler, FederatedCryptoApps } from '../../src/federation/console.js';
+import {
+  commandKeyOpener,
+  cryptoConsoleCommandHandler,
+  ensureConsoleCommandKey,
+  FederatedCryptoApps,
+} from '../../src/federation/console.js';
 import { RedisConsoleChannel } from '../../src/federation/redis_channel.js';
 import { query, type SqlDatabase } from '../../src/sql.js';
 import { LucidStore } from '../../src/store/lucid_store.js';
@@ -33,6 +38,10 @@ afterEach(async () => {
 
 const ET = 'entre-textos';
 const PREFIX = 'entretextos';
+/** The Hub's token for Entre Textos, as Entre Textos' `verifyTenant` (authkit's, in real life) sees it. */
+const HUB_TOKEN = 'hub-token-for-entre-textos';
+const verifyTenant = ({ token }: { token?: string | undefined }) =>
+  token === HUB_TOKEN ? { partition: ET, capabilities: ['crypto:*'], clientId: 'hub' } : null;
 
 async function sqlite(): Promise<SqlDatabase> {
   const dir = await mkdtemp(join(tmpdir(), 'agora-crypto-fed-'));
@@ -97,9 +106,16 @@ async function setup(options: Setup = {}) {
   await et.createKey(seed, { name: 'signing', type: 'ed25519' });
   const runs: string[] = [];
   const owner = options.owner ?? {};
+  // Token mode: Entre Textos publishes its command key in its own tables, where the Hub reads it.
+  await ensureConsoleCommandKey(et, ET);
   if (owner.listening !== false) {
     for (let i = 0; i < (owner.instances ?? 2); i++) {
-      const channel = new RedisConsoleChannel({ client: bus.connection(), prefix: PREFIX });
+      const channel = new RedisConsoleChannel({
+        client: bus.connection(),
+        prefix: PREFIX,
+        verifyTenant,
+        opener: commandKeyOpener(et, [ET]),
+      });
       const handler = cryptoConsoleCommandHandler({
         service: et,
         actions: owner.actions ?? true,
@@ -126,7 +142,7 @@ async function setup(options: Setup = {}) {
         label: 'Entre Textos',
         partition: ET,
         store: { connection: 'et' },
-        controlPlane: { prefix: PREFIX },
+        controlPlane: { prefix: PREFIX, token: HUB_TOKEN },
         timeoutMs: 500,
         ...(options.entry ?? {}),
       },
@@ -188,12 +204,18 @@ describe('federated crypto console', () => {
     const before = (await etAudit()).length;
     const keys = await call('/keys?partition=et');
     expect(keys.status).toBe(200);
-    expect(keys.body.data.map((k: any) => k.name)).toEqual(['signing', 'thesis', 'webhooks']);
+    // The app's own keys, and the command key the Hub seals its commands to (token mode).
+    expect(keys.body.data.map((k: any) => k.name)).toEqual([
+      'console-commands',
+      'signing',
+      'thesis',
+      'webhooks',
+    ]);
     const one = await call('/keys/signing?partition=et');
     expect(one.body).toMatchObject({ name: 'signing', type: 'ed25519', latestVersion: 1 });
     expect(one.body.versions[0].publicKey).toMatchObject({ kty: 'OKP' });
     const overview = await call('/overview?partition=et');
-    expect(overview.body).toMatchObject({ partition: ET, keys: 3, versions: 3 });
+    expect(overview.body).toMatchObject({ partition: ET, keys: 4, versions: 4 });
     const audit = await call('/audit?partition=et');
     expect(audit.body.data.length).toBe(before);
 
@@ -242,7 +264,9 @@ describe('federated crypto console', () => {
       expect(test.body).toMatchObject({ key: name, ok: true });
       expect(Object.keys(test.body).sort()).toEqual(['key', 'ok', 'operations', 'type', 'version']);
     }
-    expect((await etAudit({ operation: 'decrypt' }))[0]).toMatchObject({ actor: 'ana@hub' });
+    expect((await etAudit({ operation: 'decrypt', key: 'thesis' }))[0]).toMatchObject({
+      actor: 'ana@hub',
+    });
 
     const created = await call('/keys?partition=et', {
       method: 'POST',
@@ -251,8 +275,15 @@ describe('federated crypto console', () => {
     expect(created.status).toBe(201);
     const deleted = await call('/keys/thesis?partition=et', { method: 'DELETE' });
     expect(deleted.body).toEqual({ key: 'thesis', deleted: true });
-    // No key material ever crossed the bus.
+    // No key material ever crossed the bus, nor the Hub's token, nor what it asked for.
     expect(bus.wire).not.toMatch(/agora:v1:/);
+    expect(bus.wire).not.toContain(HUB_TOKEN);
+    const commands = bus.published
+      .filter((p) => p.channel === `${PREFIX}-crypto-console`)
+      .map((p) => p.message)
+      .join('\n');
+    expect(commands).not.toContain('ana@hub');
+    expect(commands).not.toContain('rotateKey');
   });
 
   it('rewraps through the app and returns only the new ciphertext', async () => {

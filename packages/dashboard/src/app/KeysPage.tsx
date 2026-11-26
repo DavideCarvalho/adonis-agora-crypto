@@ -48,7 +48,7 @@ export const keysParams = {
 };
 
 export function KeysPage({ onOpen }: { onOpen: (name: string) => void }) {
-  const { api, meta, partition, readOnly } = useConsole();
+  const { api, meta, partition, cannotManage } = useConsole();
   // The server's key types (`/meta`), else the four this console knows.
   const types = meta.keyTypes.length > 0 ? meta.keyTypes : TYPES;
   const client = useQueryClient();
@@ -177,8 +177,8 @@ export function KeysPage({ onOpen }: { onOpen: (name: string) => void }) {
           <Button
             variant="ghost"
             size="sm"
-            disabled={key.deletedAt !== undefined || rotate.isPending || readOnly !== undefined}
-            title={readOnly}
+            disabled={key.deletedAt !== undefined || rotate.isPending || cannotManage !== undefined}
+            title={cannotManage}
             onClick={(event) => {
               event.stopPropagation();
               rotate.mutate(key.name);
@@ -189,8 +189,10 @@ export function KeysPage({ onOpen }: { onOpen: (name: string) => void }) {
           <Button
             variant="ghost"
             size="sm"
-            disabled={key.deletedAt !== undefined || !key.deletionAllowed || readOnly !== undefined}
-            title={readOnly}
+            disabled={
+              key.deletedAt !== undefined || !key.deletionAllowed || cannotManage !== undefined
+            }
+            title={cannotManage}
             onClick={(event) => {
               event.stopPropagation();
               setDeleting(key);
@@ -210,8 +212,8 @@ export function KeysPage({ onOpen }: { onOpen: (name: string) => void }) {
         description="Named keys of this app. Rotate adds a version; old data keeps opening until the floor moves."
         actions={
           <Button
-            disabled={readOnly !== undefined}
-            title={readOnly}
+            disabled={cannotManage !== undefined}
+            title={cannotManage}
             onClick={() => setCreating(true)}
           >
             New key
@@ -265,8 +267,8 @@ export function KeysPage({ onOpen }: { onOpen: (name: string) => void }) {
               action={
                 search ? undefined : (
                   <Button
-                    disabled={readOnly !== undefined}
-                    title={readOnly}
+                    disabled={cannotManage !== undefined}
+                    title={cannotManage}
                     onClick={() => setCreating(true)}
                   >
                     New key

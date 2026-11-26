@@ -47,6 +47,7 @@ const OPERATIONS = new Set<string>([
   'keys.delete',
   'keys.export',
   'keys.public',
+  'keys.has',
   'audit',
   'overview',
   'whoami',
@@ -139,6 +140,8 @@ export function createCryptoRpc(options: CryptoRpcOptions): CryptoRpc {
           String(input.name ?? ''),
           input.version === undefined ? undefined : Number(input.version),
         );
+      case 'keys.has':
+        return service.hasKey(principal, { key: String(input.key ?? '') });
       case 'keys.public':
         return service.publicKey(principal, String(input.name ?? ''));
       case 'audit':

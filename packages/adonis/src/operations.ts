@@ -23,6 +23,7 @@ import type {
   VerifyResult,
   Whoami,
 } from '@adonis-agora/crypto-core';
+import { assertSealedFor } from '@adonis-agora/crypto-core';
 import type {
   AuditListQuery,
   CryptoPrincipal,
@@ -50,6 +51,11 @@ import { resolveTenantToken, type TenantTokenSource } from '@adonis-agora/crypto
 export interface CryptoOperations {
   encrypt(input: EncryptInput): Promise<EncryptResult>;
   decrypt(input: DecryptInput): Promise<DecryptResult>;
+  /**
+   * Whether `key` exists in this app's own partition: the same authorization as `decrypt` (an
+   * app's own `console-*` keys need no grant), `false` when missing, never audited as an error.
+   */
+  hasKey(input: { key: string }): Promise<boolean>;
   rewrap(input: RewrapInput): Promise<RewrapResult>;
   generateDataKey(input: DataKeyInput): Promise<DataKeyResult>;
   sign(input: SignInput): Promise<SignResult>;
@@ -89,6 +95,7 @@ export function localOperations(
   return {
     encrypt: (input) => service.encrypt(principal, input),
     decrypt: (input) => service.decrypt(principal, input),
+    hasKey: async (input) => (await service.hasKey(principal, input)).exists,
     rewrap: (input) => service.rewrap(principal, input),
     generateDataKey: (input) => service.generateDataKey(principal, input),
     sign: (input) => service.sign(principal, input),
@@ -139,6 +146,7 @@ export function remoteOperations(client: {
   deleteKey: CryptoOperations['deleteKey'];
   exportKey: CryptoOperations['exportKey'];
   publicKey: CryptoOperations['publicKey'];
+  hasKey: CryptoOperations['hasKey'];
   audit: CryptoOperations['audit'];
   whoami(): Promise<Whoami>;
   overview?: never;
@@ -174,6 +182,7 @@ export function remoteOperations(client: {
     deleteKey: (name) => client.deleteKey(name),
     exportKey: (name, version) => client.exportKey(name, version),
     publicKey: (name) => client.publicKey(name),
+    hasKey: (input) => client.hasKey(input),
     audit: (input) =>
       client.audit({
         ...(input?.page !== undefined ? { page: input.page } : {}),
@@ -215,8 +224,10 @@ export function transportOperations(
   const call = async <T>(operation: TransportOperation, input: unknown): Promise<T> =>
     transport.call<T>({ operation, input, token: await source.get() });
   return {
-    encrypt: (input) => call('encrypt', input),
+    encrypt: async (input) => assertSealedFor(input, await call<EncryptResult>('encrypt', input)),
     decrypt: (input) => call('decrypt', input),
+    hasKey: async (input) =>
+      (await call<{ exists?: boolean }>('keys.has', { key: input?.key }))?.exists === true,
     rewrap: (input) => call('rewrap', input),
     generateDataKey: (input) => call('datakeys', input),
     sign: (input) => call('sign', input),

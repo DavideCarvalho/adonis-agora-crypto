@@ -43,7 +43,14 @@ function router(routes: Route[]) {
 }
 
 async function start(
-  options: { authorize?: boolean; path?: string; grant?: '*' | string[]; apps?: string[] } = {},
+  options: {
+    authorize?: boolean;
+    path?: string;
+    grant?: '*' | string[];
+    apps?: string[];
+    capabilities?: string[];
+    access?: 'read' | 'write';
+  } = {},
 ) {
   const crypto = memoryCrypto();
   const console = new CryptoConsole({
@@ -54,9 +61,12 @@ async function start(
       authorize: () =>
         options.authorize === false
           ? { allowed: false as const, status: 403 as const, reason: 'forbidden' as const }
-          : options.grant !== undefined
-            ? { allowed: true as const, apps: options.grant }
-            : { allowed: true as const },
+          : {
+              allowed: true as const,
+              ...(options.grant !== undefined ? { apps: options.grant } : {}),
+              ...(options.capabilities !== undefined ? { capabilities: options.capabilities } : {}),
+              ...(options.access !== undefined ? { access: options.access } : {}),
+            },
     }),
     spaDir: '/nowhere',
     defaultPartition: 'shop',
@@ -264,6 +274,123 @@ describe('console routes', () => {
       delete: register('DELETE'),
     };
   }
+
+  it("a read-only viewer reads everything but changes nothing on the console's own apps", async () => {
+    const { base, crypto } = await start({ capabilities: ['crypto:keys:read'] });
+    await crypto.service.createKey(crypto.principal, {
+      name: 'orders',
+      type: 'aes256-gcm',
+      deletionAllowed: true,
+    });
+    const api = `${base}/_crypto/api`;
+    // The SPA learns what it may offer.
+    const meta = (await (await fetch(`${api}/meta`)).json()) as { capabilities: string[] };
+    expect(meta.capabilities).toEqual(['crypto:keys:read']);
+    expect((await fetch(`${api}/keys?partition=shop`)).status).toBe(200);
+    expect((await fetch(`${api}/keys/orders?partition=shop`)).status).toBe(200);
+    expect((await fetch(`${api}/audit?partition=shop`)).status).toBe(200);
+
+    const refused = [
+      await fetch(`${api}/keys?partition=shop`, json('POST', { name: 'x', type: 'aes256-gcm' })),
+      await fetch(`${api}/keys/orders/rotate?partition=shop`, json('POST', {})),
+      await fetch(`${api}/keys/orders?partition=shop`, json('PATCH', { exportable: true })),
+      await fetch(`${api}/keys/orders?partition=shop`, json('DELETE')),
+    ];
+    for (const response of refused) {
+      expect(response.status).toBe(403);
+      expect(((await response.json()) as { error: string }).error).toMatch(
+        /the viewer lacks crypto:keys:manage, so it may not .*\(console.authorize granted crypto:keys:read\)/,
+      );
+    }
+    // A test and a rewrap need the key's operations, which this viewer lacks.
+    const test = await fetch(`${api}/keys/orders/test?partition=shop`, json('POST', {}));
+    expect(test.status).toBe(403);
+    expect(((await test.json()) as { error: string }).error).toMatch(
+      /the viewer lacks crypto:(encrypt|decrypt):orders/,
+    );
+    const key = await crypto.service.getKey(crypto.principal, 'orders');
+    expect(key).toMatchObject({ latestVersion: 1, exportable: false });
+    expect(key.deletedAt).toBeUndefined();
+  });
+
+  it('a key-scoped manage grant creates those keys only; no capabilities means full rights', async () => {
+    const scoped = await start({ capabilities: ['crypto:keys:manage:subject_*'] });
+    await scoped.crypto.service.createKey(scoped.crypto.principal, {
+      name: 'subject_1',
+      type: 'aes256-gcm',
+    });
+    await scoped.crypto.service.createKey(scoped.crypto.principal, {
+      name: 'orders',
+      type: 'aes256-gcm',
+    });
+    const api = `${scoped.base}/_crypto/api`;
+    // Create and delete take a key-scoped grant (rotate and policy need crypto:keys:manage).
+    expect(
+      (
+        await fetch(
+          `${api}/keys?partition=shop`,
+          json('POST', { name: 'subject_2', type: 'aes256-gcm' }),
+        )
+      ).status,
+    ).toBe(201);
+    expect(
+      (
+        await fetch(
+          `${api}/keys?partition=shop`,
+          json('POST', { name: 'billing', type: 'aes256-gcm' }),
+        )
+      ).status,
+    ).toBe(403);
+    const rotate = await fetch(`${api}/keys/subject_1/rotate?partition=shop`, json('POST', {}));
+    expect(rotate.status).toBe(403);
+    expect(((await rotate.json()) as { error: string }).error).toMatch(
+      /the viewer lacks crypto:keys:manage/,
+    );
+
+    const full = await start();
+    const meta = (await (await fetch(`${full.base}/_crypto/api/meta`)).json()) as {
+      capabilities: string[];
+    };
+    // The whole crypto console set (never `crypto:keys:export`).
+    expect(meta.capabilities).toContain('crypto:keys:manage');
+    expect(meta.capabilities).not.toContain('crypto:keys:export');
+  });
+
+  it('narrows the viewer to the crypto console set, with the crypto:console aliases and access', async () => {
+    const meta = async (grant: Parameters<typeof start>[0]) => {
+      const { base } = await start(grant);
+      return (
+        (await (await fetch(`${base}/_crypto/api/meta`)).json()) as { capabilities: string[] }
+      ).capabilities;
+    };
+    // Outside the console set: dropped (export never travels).
+    expect(await meta({ capabilities: ['crypto:keys:export', 'crypto:datakey:orders'] })).toEqual(
+      [],
+    );
+    expect(await meta({ capabilities: ['crypto:console:read'] })).toEqual(
+      expect.arrayContaining(['crypto:keys:read']),
+    );
+    expect(await meta({ capabilities: ['crypto:console:read'] })).not.toContain(
+      'crypto:keys:manage',
+    );
+    expect(await meta({ capabilities: ['crypto:console:*'] })).toContain('crypto:keys:manage');
+    // `access: 'read'` is the read set only, whatever `capabilities` says.
+    const read = await meta({ capabilities: ['crypto:*'], access: 'read' });
+    expect(read).toEqual(['crypto:keys:read']);
+    // Wildcard look-alikes of the aliases are not aliases.
+    expect(await meta({ capabilities: ['crypto:*:write', 'crypto:console:w*'] })).toEqual([]);
+  });
+
+  it("an `access: 'read'` viewer cannot test a key", async () => {
+    const { base, crypto } = await start({ access: 'read' });
+    await crypto.service.createKey(crypto.principal, { name: 'orders', type: 'aes256-gcm' });
+    const test = await fetch(
+      `${base}/_crypto/api/keys/orders/test?partition=shop`,
+      json('POST', {}),
+    );
+    expect(test.status).toBe(403);
+    expect(((await test.json()) as { error: string }).error).toMatch(/the viewer lacks/);
+  });
 
   it('registers the page once instead of `/<path>` and `/<path>/`', () => {
     const routes: Route[] = [];

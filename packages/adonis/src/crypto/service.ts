@@ -22,6 +22,7 @@ import {
   type EncryptInput,
   type EncryptResult,
   type ExportKeyResult,
+  type HasKeyResult,
   type HmacInput,
   type HmacResult,
   isValidKeyName,
@@ -33,6 +34,7 @@ import {
   SIGNING_KEY_TYPES,
   type SignInput,
   type SignResult,
+  sealScope,
   type VerifyInput,
   type VerifyResult,
   type Whoami,
@@ -87,7 +89,15 @@ export interface CryptoServiceOptions {
   id?: () => string;
   /** Batch ceiling. Default `100`. */
   maxBatchSize?: number;
+  /**
+   * Sealing for another partition creates a missing `console-*` key there (`aes256-gcm`) instead
+   * of answering 404, so separate apps coordinate their console keys by themselves. Default `true`.
+   */
+  sealProvisioning?: boolean;
 }
+
+/** The keys a seal may create in the target partition (the Agora console keys, `console-<lib>`). */
+const SEAL_PROVISIONED_PREFIX = 'console-';
 
 export interface ListKeysQuery {
   page: number;
@@ -212,7 +222,12 @@ export class CryptoService {
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#id = options.id ?? newAuditId;
     this.#maxBatch = options.maxBatchSize ?? 100;
+    this.#sealProvisioning = options.sealProvisioning !== false;
   }
+
+  readonly #sealProvisioning: boolean;
+  /** One creation per missing key at a time in this process (two seals at once: one key). */
+  readonly #provisioning = new Map<string, Promise<unknown>>();
 
   /* ------------------------------------------------------------------------------------------ */
   /* Audit                                                                                       */
@@ -514,6 +529,14 @@ export class CryptoService {
   }
 
   async createKey(principal: CryptoPrincipal, input: CreateKeyInput): Promise<CryptoKeyView> {
+    return this.#createKey(principal, input);
+  }
+
+  async #createKey(
+    principal: CryptoPrincipal,
+    input: CreateKeyInput,
+    metadata?: Record<string, string>,
+  ): Promise<CryptoKeyView> {
     this.#assertPartition(principal);
     const name = input?.name;
     if (!isValidKeyName(name)) {
@@ -576,6 +599,7 @@ export class CryptoService {
         });
         return { result: await this.#view(record), version: 1 };
       },
+      metadata,
     );
   }
 
@@ -713,47 +737,179 @@ export class CryptoService {
 
   async encrypt(principal: CryptoPrincipal, input: EncryptInput): Promise<EncryptResult> {
     this.#assertPartition(principal);
+    const target = input?.partition;
+    if (target !== undefined) {
+      if (typeof target !== 'string' || target === '') {
+        throw new CryptoError('invalid', 'crypto: `partition` must be a non-empty string');
+      }
+      const { partition: _partition, ...rest } = input;
+      const result =
+        target === principal.partition
+          ? await this.#encrypt(principal, rest)
+          : await this.#sealFor(principal, target, rest);
+      return { ...result, partition: target };
+    }
+    return this.#encrypt(principal, input);
+  }
+
+  /**
+   * Seal for another partition: encrypt only, with `crypto:seal:<key>` on the caller's token (its
+   * own partition's grant; `crypto:encrypt:<key>` is not enough). The operation is audited in the
+   * target partition, where the key lives, with the caller's actor and its partition as the client.
+   */
+  async #sealFor(
+    principal: CryptoPrincipal,
+    target: string,
+    input: EncryptInput,
+  ): Promise<EncryptResult> {
     const name = assertString(input?.key, 'key');
-    return this.#perform(principal, 'encrypt', name, cryptoScope('encrypt', name), async () => {
-      const record = await this.#keyRecord(principal, name);
-      this.#assertType(record, ENCRYPTION_KEY_TYPES, 'encrypt');
-      const plaintext = assertPlaintext(input.plaintext);
-      const aad = assertAad(input.aad);
-      const chosen = await this.#versionFor(record, input.version);
-      const material = await this.#material(record, chosen);
-      if (record.type === 'x25519') {
-        if (material.kind !== 'x25519') {
-          throw new CryptoError('unreadable', `crypto: "${name}" is not an X25519 key`);
+    const scope = sealScope(name);
+    if (!isValidKeyName(name))
+      throw new CryptoError('invalid', `crypto: invalid key name "${name}"`);
+    // Only an explicit `crypto:seal:…` grant counts: a tenant's `crypto:*` over its own partition
+    // must not let it forge ciphertext another app trusts (a console command, say).
+    const sealGrants = principal.capabilities.filter(
+      (capability) => typeof capability === 'string' && capability.startsWith('crypto:seal:'),
+    );
+    if (!capabilityAllows(sealGrants, scope)) {
+      // Refused and audited in the caller's own partition: the target is not touched.
+      await this.#audit(principal, {
+        operation: 'encrypt',
+        key: name,
+        result: 'denied',
+        error: `missing capability ${scope}`,
+        metadata: { sealFor: target },
+      });
+      throw new CryptoError(
+        'forbidden',
+        `crypto: the token lacks ${scope} (sealing for partition "${target}" needs that explicit grant; crypto:encrypt:${name} and crypto:* are not enough)`,
+      );
+    }
+    let record = await this.store.getKey(target, name);
+    if (!record && this.#sealProvisioning && name.startsWith(SEAL_PROVISIONED_PREFIX)) {
+      record = await this.#provision(principal, target, name);
+    }
+    if (!record || record.deletedAt !== undefined) {
+      throw new CryptoError(
+        'not_found',
+        `crypto: partition "${target}" has no key "${name}" to seal with (create it there: node ace crypto:keys:create ${name} --type aes256-gcm --application ${target})`,
+      );
+    }
+    return this.#encrypt(
+      {
+        partition: target,
+        capabilities: [cryptoScope('encrypt', name)],
+        actor: principal.actor,
+        clientId: principal.clientId ?? `partition:${principal.partition}`,
+      },
+      input,
+      { sealedFrom: principal.partition },
+    );
+  }
+
+  /**
+   * Seal path only: creates the missing `console-*` key (`aes256-gcm`) in `target`, audited there
+   * as a creation by the sealing caller (`metadata.provisionedBy: 'seal'`). Idempotent and safe
+   * under concurrency: one creation per key in this process, and a creation lost to another
+   * instance finds the key on the second look.
+   */
+  async #provision(
+    principal: CryptoPrincipal,
+    target: string,
+    name: string,
+  ): Promise<CryptoKeyRecord | null> {
+    const slot = `${target}\u0000${name}`;
+    let pending = this.#provisioning.get(slot);
+    if (!pending) {
+      pending = this.#createKey(
+        {
+          partition: target,
+          capabilities: [`crypto:keys:manage:${name}`],
+          actor: principal.actor,
+          clientId: principal.clientId ?? `partition:${principal.partition}`,
+        },
+        {
+          name,
+          type: 'aes256-gcm',
+          description: 'Seals federated console commands (created by the first seal)',
+        },
+        { provisionedBy: 'seal', sealedFrom: principal.partition },
+      )
+        .catch(() => undefined)
+        .finally(() => this.#provisioning.delete(slot));
+      this.#provisioning.set(slot, pending);
+    }
+    await pending;
+    const record = await this.store.getKey(target, name);
+    return record && record.type === 'aes256-gcm' ? record : null;
+  }
+
+  /**
+   * Refuses a partition other than the token's on an operation that never crosses partitions
+   * (only `encrypt` may seal for another app).
+   */
+  #ownPartitionOnly(principal: CryptoPrincipal, input: unknown, operation: string): void {
+    const named = (input as { partition?: unknown } | null | undefined)?.partition;
+    if (named === undefined || named === principal.partition) return;
+    throw new CryptoError(
+      'forbidden',
+      `crypto: ${operation} never crosses partitions (only encrypt may seal for another one, with crypto:seal:<key>)`,
+    );
+  }
+
+  async #encrypt(
+    principal: CryptoPrincipal,
+    input: EncryptInput,
+    metadata?: Record<string, string>,
+  ): Promise<EncryptResult> {
+    const name = assertString(input?.key, 'key');
+    return this.#perform(
+      principal,
+      'encrypt',
+      name,
+      cryptoScope('encrypt', name),
+      async () => {
+        const record = await this.#keyRecord(principal, name);
+        this.#assertType(record, ENCRYPTION_KEY_TYPES, 'encrypt');
+        const plaintext = assertPlaintext(input.plaintext);
+        const aad = assertAad(input.aad);
+        const chosen = await this.#versionFor(record, input.version);
+        const material = await this.#material(record, chosen);
+        if (record.type === 'x25519') {
+          if (material.kind !== 'x25519') {
+            throw new CryptoError('unreadable', `crypto: "${name}" is not an X25519 key`);
+          }
+          return {
+            result: {
+              key: name,
+              version: chosen.version,
+              ciphertext: sealTo(material.publicKey, plaintext, {
+                ...(aad !== undefined ? { aad } : {}),
+              }),
+            },
+            version: chosen.version,
+            bytes: Buffer.byteLength(plaintext),
+          };
+        }
+        if (material.kind !== 'aes256-gcm') {
+          throw new CryptoError('unreadable', `crypto: "${name}" is not an AES-256-GCM key`);
         }
         return {
           result: {
             key: name,
             version: chosen.version,
-            ciphertext: sealTo(material.publicKey, plaintext, {
+            ciphertext: sealAead(material.key, plaintext, {
+              key: name,
+              version: chosen.version,
               ...(aad !== undefined ? { aad } : {}),
             }),
           },
           version: chosen.version,
           bytes: Buffer.byteLength(plaintext),
         };
-      }
-      if (material.kind !== 'aes256-gcm') {
-        throw new CryptoError('unreadable', `crypto: "${name}" is not an AES-256-GCM key`);
-      }
-      return {
-        result: {
-          key: name,
-          version: chosen.version,
-          ciphertext: sealAead(material.key, plaintext, {
-            key: name,
-            version: chosen.version,
-            ...(aad !== undefined ? { aad } : {}),
-          }),
-        },
-        version: chosen.version,
-        bytes: Buffer.byteLength(plaintext),
-      };
-    });
+      },
+      metadata,
+    );
   }
 
   async #open(
@@ -828,17 +984,43 @@ export class CryptoService {
     };
   }
 
+  /**
+   * Whether `input.key` exists (and is not deleted) in the caller's own partition. The same
+   * authorization as {@link decrypt} on it — an app's own `console-*` keys need no grant — and a
+   * refusal is the same `forbidden`; a missing key is `false`. Nothing is audited: it reads no
+   * material, and a boot-time check must not fill the trail with errors.
+   */
+  async hasKey(principal: CryptoPrincipal, input: { key: string }): Promise<HasKeyResult> {
+    this.#assertPartition(principal);
+    this.#ownPartitionOnly(principal, input, 'hasKey');
+    const name = assertString(input?.key, 'key');
+    if (!isValidKeyName(name)) return { key: name, exists: false };
+    const opener = name.startsWith(SEAL_PROVISIONED_PREFIX)
+      ? { ...principal, capabilities: [...principal.capabilities, cryptoScope('decrypt', name)] }
+      : principal;
+    return this.#perform(opener, null, name, cryptoScope('decrypt', name), async () => {
+      const record = await this.store.getKey(principal.partition, name);
+      return { result: { key: name, exists: !!record && record.deletedAt === undefined } };
+    });
+  }
+
   async decrypt(principal: CryptoPrincipal, input: DecryptInput): Promise<DecryptResult> {
     this.#assertPartition(principal);
+    this.#ownPartitionOnly(principal, input, 'decrypt');
     const name = assertString(input?.key, 'key');
     const context = assertContext(input.context);
+    // An app always opens its own console keys: `crypto:decrypt:console-*` in its own partition is
+    // implicit (decrypt only, this call only; the partition is the token's, never another one).
+    const opener = name.startsWith(SEAL_PROVISIONED_PREFIX)
+      ? { ...principal, capabilities: [...principal.capabilities, cryptoScope('decrypt', name)] }
+      : principal;
     return this.#perform(
-      principal,
+      opener,
       'decrypt',
       name,
       cryptoScope('decrypt', name),
       async () => {
-        const opened = await this.#open(principal, { ...input, key: name });
+        const opened = await this.#open(opener, { ...input, key: name });
         return {
           result: { key: name, version: opened.version.version, plaintext: opened.plaintext },
           version: opened.version.version,
@@ -851,6 +1033,7 @@ export class CryptoService {
 
   async rewrap(principal: CryptoPrincipal, input: RewrapInput): Promise<RewrapResult> {
     this.#assertPartition(principal);
+    this.#ownPartitionOnly(principal, input, 'rewrap');
     const name = assertString(input?.key, 'key');
     const context = assertContext(input.context);
     return this.#perform(
@@ -890,6 +1073,7 @@ export class CryptoService {
 
   async generateDataKey(principal: CryptoPrincipal, input: DataKeyInput): Promise<DataKeyResult> {
     this.#assertPartition(principal);
+    this.#ownPartitionOnly(principal, input, 'datakeys');
     const name = assertString(input?.key, 'key');
     const context = assertContext(input.context);
     return this.#perform(
@@ -931,6 +1115,7 @@ export class CryptoService {
 
   async sign(principal: CryptoPrincipal, input: SignInput): Promise<SignResult> {
     this.#assertPartition(principal);
+    this.#ownPartitionOnly(principal, input, 'sign');
     const name = assertString(input?.key, 'key');
     return this.#perform(principal, 'sign', name, cryptoScope('sign', name), async () => {
       const record = await this.#keyRecord(principal, name);
@@ -955,6 +1140,7 @@ export class CryptoService {
 
   async verify(principal: CryptoPrincipal, input: VerifyInput): Promise<VerifyResult> {
     this.#assertPartition(principal);
+    this.#ownPartitionOnly(principal, input, 'verify');
     const name = assertString(input?.key, 'key');
     return this.#perform(principal, 'verify', name, cryptoScope('verify', name), async () => {
       const record = await this.#keyRecord(principal, name);
@@ -976,6 +1162,7 @@ export class CryptoService {
 
   async hmac(principal: CryptoPrincipal, input: HmacInput): Promise<HmacResult> {
     this.#assertPartition(principal);
+    this.#ownPartitionOnly(principal, input, 'hmac');
     const name = assertString(input?.key, 'key');
     return this.#perform(principal, 'hmac', name, cryptoScope('hmac', name), async () => {
       const record = await this.#keyRecord(principal, name);

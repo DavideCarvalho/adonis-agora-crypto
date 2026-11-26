@@ -64,6 +64,7 @@ authorize: async (ctx) => {
 },
 // a token for scripts, limited to one app:
 // authorize: authorizeByToken({ token: env.get('CRYPTO_CONSOLE_TOKEN'), apps: ['streaming'] }),
+// (it also takes `access: 'read'`, `tenants` and `capabilities`)
 ```
 
 The grant also applies to the ⌘K search and the MCP dev tools.
