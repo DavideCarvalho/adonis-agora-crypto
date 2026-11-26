@@ -3,6 +3,7 @@ import { CryptoService } from '../../src/crypto/service.js';
 import { normalizeConsoleAuthorizeResult } from '../../src/dashboard/console_authorize.js';
 import { resolveDashboardConfig } from '../../src/dashboard/define_config.js';
 import {
+  CAPABILITIES_REQUIRED,
   cryptoConsoleCommandHandler,
   FederatedCryptoApp,
   keyTestCapabilities,
@@ -41,6 +42,7 @@ const command = (
   args: [{ partition: 'et', name: 'orders', ...body }],
   actor: 'ana',
   via: 'Hub',
+  capabilities: ['crypto:*'],
   ...extra,
 });
 
@@ -56,6 +58,20 @@ describe('cryptoConsoleCommandHandler', () => {
     await expect(handler(command('rotateKey', { partition: 'other' }))).rejects.toMatchObject({
       status: 403,
     });
+  });
+
+  it('refuses a command that carries no viewer capabilities', async () => {
+    const { handler, service } = await owner();
+    const bare = command('rotateKey', {});
+    delete (bare as { capabilities?: unknown }).capabilities;
+    await expect(handler(bare)).rejects.toMatchObject({
+      status: 403,
+      code: CAPABILITIES_REQUIRED,
+    });
+    await expect(
+      handler(command('deleteKey', {}, { capabilities: 'crypto:*' })),
+    ).rejects.toMatchObject({ code: CAPABILITIES_REQUIRED });
+    expect((await service.getKey(admin, 'orders')).latestVersion).toBe(1);
   });
 
   it('records the viewer as actor and the console as client', async () => {
@@ -122,7 +138,9 @@ describe('the federated read side', () => {
       store: new MemoryStore(),
       channel: new RedisConsoleChannel({ client: bus.connection(), prefix: 'et' }),
     });
-    await expect(app.rotateKey('orders', { actor: 'ana' })).rejects.toMatchObject({ status: 403 });
+    await expect(
+      app.rotateKey('orders', { actor: 'ana', capabilities: ['crypto:*'] }),
+    ).rejects.toMatchObject({ status: 403 });
     expect(bus.published).toEqual([]);
   });
 
@@ -153,6 +171,33 @@ describe('federatedApps config', () => {
       validateFederatedCryptoApp('et', { ...entry, controlPlane: { prefix: '' } }, redis),
     ).toThrow(/prefix/);
     expect(() => validateFederatedCryptoApp('et', entry, undefined)).toThrow(/@adonisjs\/redis/);
+  });
+
+  it('requires the shared secret (web) for an entry that may act', () => {
+    const web = { requireSecret: true };
+    expect(() => validateFederatedCryptoApp('et', entry, redis, web)).toThrow(
+      /controlPlane\.secret/,
+    );
+    expect(() =>
+      validateFederatedCryptoApp(
+        'et',
+        { ...entry, controlPlane: { prefix: 'et', secret: 'short' } },
+        redis,
+        web,
+      ),
+    ).toThrow(/controlPlane\.secret/);
+    expect(() =>
+      validateFederatedCryptoApp(
+        'et',
+        { ...entry, controlPlane: { prefix: 'et', secret: 'a-shared-secret-0123456789' } },
+        redis,
+        web,
+      ),
+    ).not.toThrow();
+    expect(() =>
+      validateFederatedCryptoApp('et', { ...entry, actions: false }, redis, web),
+    ).not.toThrow();
+    expect(() => validateFederatedCryptoApp('et', entry, redis)).not.toThrow();
   });
 
   it('keeps federatedApps and appLabel, and the authorizer capabilities', () => {

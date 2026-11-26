@@ -43,7 +43,13 @@ function router(routes: Route[]) {
 }
 
 async function start(
-  options: { authorize?: boolean; path?: string; grant?: '*' | string[]; apps?: string[] } = {},
+  options: {
+    authorize?: boolean;
+    path?: string;
+    grant?: '*' | string[];
+    apps?: string[];
+    capabilities?: string[];
+  } = {},
 ) {
   const crypto = memoryCrypto();
   const console = new CryptoConsole({
@@ -54,9 +60,11 @@ async function start(
       authorize: () =>
         options.authorize === false
           ? { allowed: false as const, status: 403 as const, reason: 'forbidden' as const }
-          : options.grant !== undefined
-            ? { allowed: true as const, apps: options.grant }
-            : { allowed: true as const },
+          : {
+              allowed: true as const,
+              ...(options.grant !== undefined ? { apps: options.grant } : {}),
+              ...(options.capabilities !== undefined ? { capabilities: options.capabilities } : {}),
+            },
     }),
     spaDir: '/nowhere',
     defaultPartition: 'shop',
@@ -177,6 +185,51 @@ describe('console API', () => {
     expect(missing.status).toBe(404);
     const bad = await fetch(`${base}/_crypto/api/keys?partition=shop`, json('POST', {}));
     expect(bad.status).toBe(400);
+  });
+});
+
+describe("console honors authorize's capabilities on its own partitions", () => {
+  it('a viewer granted crypto:keys:read reads but cannot create, rotate, re-policy or delete', async () => {
+    const { base, crypto } = await start({ capabilities: ['crypto:keys:read'] });
+    await crypto.service.createKey(crypto.principal, {
+      name: 'media',
+      type: 'aes256-gcm',
+      deletionAllowed: true,
+    });
+    const list = await fetch(`${base}/_crypto/api/keys?partition=shop&page=1&size=10`);
+    expect(list.status).toBe(200);
+    const meta = (await (await fetch(`${base}/_crypto/api/meta`)).json()) as {
+      capabilities: string[];
+    };
+    expect(meta.capabilities).toEqual(['crypto:keys:read']);
+
+    const attempts = [
+      fetch(`${base}/_crypto/api/keys?partition=shop`, {
+        ...json('POST', { name: 'other', type: 'aes256-gcm' }),
+      }),
+      fetch(`${base}/_crypto/api/keys/media/rotate?partition=shop`, json('POST', {})),
+      fetch(`${base}/_crypto/api/keys/media?partition=shop`, {
+        ...json('PATCH', { exportable: true }),
+      }),
+      fetch(`${base}/_crypto/api/keys/media?partition=shop`, json('DELETE')),
+      fetch(`${base}/_crypto/api/keys/media/test?partition=shop`, json('POST', {})),
+    ];
+    for (const response of await Promise.all(attempts)) expect(response.status).toBe(403);
+    const key = await crypto.service.getKey(crypto.principal, 'media');
+    expect(key).toMatchObject({ latestVersion: 1, exportable: false });
+  });
+
+  it('crypto:keys:manage manages keys; an authorize without capabilities keeps full rights', async () => {
+    const managed = await start({ capabilities: ['crypto:keys:manage'] });
+    const created = await fetch(`${managed.base}/_crypto/api/keys?partition=shop`, {
+      ...json('POST', { name: 'media', type: 'aes256-gcm' }),
+    });
+    expect(created.status).toBe(201);
+    const full = await start();
+    const again = await fetch(`${full.base}/_crypto/api/keys?partition=shop`, {
+      ...json('POST', { name: 'media', type: 'aes256-gcm' }),
+    });
+    expect(again.status).toBe(201);
   });
 });
 

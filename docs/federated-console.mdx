@@ -34,7 +34,13 @@ export default defineConfig({
         // A connection in THIS app's config/database.ts that reaches its tables.
         store: { connection: 'entretextos', schema: 'public' },
         // A connection in THIS app's config/redis.ts, and the app's consoleCommands.prefix.
-        controlPlane: { connection: 'main', prefix: 'entretextos' },
+        // `secret` is shared with that app (its consoleCommands.secret, 16+ characters): every
+        // command and answer is signed with it. Required unless `actions: false`.
+        controlPlane: {
+          connection: 'main',
+          prefix: 'entretextos',
+          secret: env.get('CRYPTO_CONSOLE_SECRET'),
+        },
         // actions: false,   // browse only from here
         // timeoutMs: 15_000,
       },
@@ -61,7 +67,8 @@ GRANT SELECT (app, name, version, kid, public_key, created_at, created_by)
 
 `authorize` decides, with the same `apps` grant as every Agora console: a viewer sees the federated
 apps the grant names (`'*'` or no `apps`: all of them). Its optional `capabilities` narrow what that
-viewer may ask the other app to do:
+viewer may do, on the other app and on this console's own partitions alike (create, rotate, policy
+and delete need `crypto:keys:manage`; a key test its operations; rewrap `crypto:rewrap:<key>`):
 
 ```ts title="config/crypto.ts"
 console: {
@@ -89,13 +96,18 @@ export default defineConfig({
   consoleCommands: {
     connection: 'main',
     prefix: 'entretextos',
+    // Shared with the console (its federatedApps.<app>.controlPlane.secret), 16+ characters.
+    secret: env.get('CRYPTO_CONSOLE_SECRET'),
     actions: true,
     // capabilities: ['crypto:keys:read', 'crypto:keys:manage'],
   },
 })
 ```
 
-It needs `@adonisjs/redis`. Every web instance listens; exactly one runs each command. With
+It needs `@adonisjs/redis` and the shared `secret`; without the secret the web process refuses to
+boot. Every command and answer carries an HMAC under the secret, a command older than a minute is
+refused, each one runs at most once, and a command without the viewer's capabilities is refused.
+Every web instance listens; exactly one runs each command. With
 `actions` off (the default), the other console only browses.
 
 Each operation runs through this app's own crypto service: the capability check, the root key and

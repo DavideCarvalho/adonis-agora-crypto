@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 
 /**
  * The Redis channel a federated console talks to another app over: the console publishes a command
@@ -59,6 +59,68 @@ export type RedisLike = IoredisLike | AdonisRedisLike;
 export const CONSOLE_COMMAND_TIMEOUT_MS = 15_000;
 /** How long the claim on a command lives (longer than any answer is waited for). */
 const CLAIM_TTL_MS = 120_000;
+/**
+ * How old (or how far in the future) a command may be. Shorter than {@link CLAIM_TTL_MS}, so a
+ * command replayed inside the window finds its claim taken, and one replayed later is stale.
+ */
+export const CONSOLE_COMMAND_MAX_AGE_MS = 60_000;
+
+/** A shared secret as configured: a string, or a `Secret` (`env.get(...)` in AdonisJS). */
+export type ConsoleSecret = string | { release(): string };
+
+/**
+ * The HMAC key every command and answer is authenticated with, derived from the shared secret
+ * (at least 16 characters). Throws on a missing or short secret.
+ */
+export function consoleMacKey(secret: ConsoleSecret, prefix: string): Buffer {
+  const raw = typeof secret === 'string' ? secret : secret?.release?.();
+  if (typeof raw !== 'string' || raw.length < 16) {
+    throw new Error(`[${PACKAGE}] the console channel secret must be at least 16 characters`);
+  }
+  return createHmac('sha256', raw)
+    .update(`agora:${CONSOLE_TOPIC}:console-commands:${prefix}`)
+    .digest();
+}
+
+/** Deterministic JSON (object keys sorted, `undefined` members dropped): what the MAC covers. */
+function canonicalJson(value: unknown): string {
+  if (value === null) return 'null';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(',')}]`;
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record)
+      .filter((key) => record[key] !== undefined)
+      .sort();
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`;
+  }
+  throw new Error(`[${PACKAGE}] cannot canonicalize ${typeof value}`);
+}
+
+function macOf(key: Buffer, kind: 'command' | 'reply', body: unknown): string {
+  return createHmac('sha256', key)
+    .update(`${CONSOLE_TOPIC}-console:${kind}\n${canonicalJson(body)}`)
+    .digest('base64url');
+}
+
+function macMatches(key: Buffer, kind: 'command' | 'reply', body: unknown, mac: unknown): boolean {
+  if (typeof mac !== 'string') return false;
+  let expected: Buffer;
+  try {
+    expected = Buffer.from(macOf(key, kind, body));
+  } catch {
+    return false;
+  }
+  const actual = Buffer.from(mac);
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+/** `value` as it will look after a JSON round trip (what the other side computes the MAC over). */
+function wireShape<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
 
 function isIoredis(client: RedisLike): client is IoredisLike {
   return typeof (client as IoredisLike).duplicate === 'function';
@@ -100,11 +162,24 @@ export class RedisConsoleChannel {
   #replies: Promise<void> | undefined;
   #answering = false;
   #closed = false;
+  readonly #key: Buffer | undefined;
 
-  constructor(options: { client: RedisLike; prefix: string }) {
+  /**
+   * `secret` is shared by the console and the owning app (`controlPlane.secret` on the console's
+   * `federatedApps` entry, `consoleCommands.secret` on the app). Every command and answer carries an
+   * HMAC under it; without it the channel neither sends nor answers commands.
+   */
+  constructor(options: { client: RedisLike; prefix: string; secret?: ConsoleSecret | undefined }) {
     if (!options.prefix) throw new Error(`[${PACKAGE}] console channel: prefix is required`);
     this.#client = options.client;
     this.prefix = options.prefix;
+    this.#key =
+      options.secret === undefined ? undefined : consoleMacKey(options.secret, options.prefix);
+  }
+
+  /** Whether a shared secret is set (no secret: no command is sent or answered). */
+  get authenticated(): boolean {
+    return this.#key !== undefined;
   }
 
   get commandChannel(): string {
@@ -141,15 +216,26 @@ export class RedisConsoleChannel {
     options: { timeoutMs?: number | undefined } = {},
   ): Promise<ConsoleReply> {
     if (this.#closed) throw new ConsoleChannelError('console channel closed', APP_UNREACHABLE);
+    const key = this.#key;
+    if (!key) {
+      throw new ConsoleChannelError(
+        `the "${this.prefix}" console channel has no shared secret: set \`controlPlane.secret\` (the app's \`consoleCommands.secret\`)`,
+        APP_UNREACHABLE,
+      );
+    }
     if (!this.#replies) {
       const replies = this.#subscribe(this.replyChannel, (payload) => {
-        let reply: ConsoleReply;
         try {
-          reply = JSON.parse(payload) as ConsoleReply;
+          const parsed = JSON.parse(payload) as { v?: unknown; reply?: unknown; mac?: unknown };
+          if (parsed?.v !== 1 || !parsed.reply || typeof parsed.reply !== 'object') return;
+          // An answer only counts when the owning app signed it with the shared secret.
+          if (!macMatches(key, 'reply', [this.prefix, parsed.reply], parsed.mac)) return;
+          const reply = parsed.reply as ConsoleReply;
+          if (typeof reply.id !== 'string') return;
+          this.#pending.get(reply.id)?.(reply);
         } catch {
-          return;
+          // a malformed answer is dropped, never thrown
         }
-        this.#pending.get(reply?.id)?.(reply);
       });
       this.#replies = replies;
       // A failed subscribe (a Redis blip) is retried by the next send, not kept for good.
@@ -185,7 +271,15 @@ export class RedisConsoleChannel {
         this.#pending.delete(command.id);
         resolve(reply);
       });
-      this.#client.publish(this.commandChannel, JSON.stringify(command)).then(
+      const body = wireShape(command);
+      const ts = Date.now();
+      const envelope = {
+        v: 1,
+        ts,
+        command: body,
+        mac: macOf(key, 'command', [this.prefix, ts, body]),
+      };
+      this.#client.publish(this.commandChannel, JSON.stringify(envelope)).then(
         (receivers) => {
           // Redis says how many subscribers got it: none means no instance answers commands.
           if (receivers === 0) {
@@ -210,6 +304,12 @@ export class RedisConsoleChannel {
     options: { onError?: (error: unknown) => void } = {},
   ): Promise<void> {
     if (this.#answering) return;
+    const key = this.#key;
+    if (!key) {
+      throw new Error(
+        `the "${this.prefix}" console channel has no shared secret: set \`consoleCommands.secret\` (the console's \`controlPlane.secret\`); refusing to answer unauthenticated commands`,
+      );
+    }
     const claim = claimOf(this.#client);
     if (!claim) {
       throw new Error(
@@ -219,23 +319,50 @@ export class RedisConsoleChannel {
     this.#answering = true;
     const instance = randomUUID();
     await this.#subscribe(this.commandChannel, (payload) => {
-      void this.#run(payload, instance, claim, handler).catch((error) => options.onError?.(error));
+      void this.#run(payload, key, instance, claim, handler).catch((error) =>
+        options.onError?.(error),
+      );
     });
+  }
+
+  /**
+   * The command in `payload` when it is authentic and fresh: signed with the shared secret, and
+   * stamped within {@link CONSOLE_COMMAND_MAX_AGE_MS} of now. Anything else is `undefined`.
+   */
+  #verify(payload: string, key: Buffer): ConsoleCommand | undefined {
+    try {
+      const parsed = JSON.parse(payload) as {
+        v?: unknown;
+        ts?: unknown;
+        command?: unknown;
+        mac?: unknown;
+      };
+      if (parsed?.v !== 1 || typeof parsed.ts !== 'number' || !Number.isFinite(parsed.ts)) {
+        return undefined;
+      }
+      if (Math.abs(Date.now() - parsed.ts) > CONSOLE_COMMAND_MAX_AGE_MS) return undefined;
+      if (!parsed.command || typeof parsed.command !== 'object') return undefined;
+      if (!macMatches(key, 'command', [this.prefix, parsed.ts, parsed.command], parsed.mac)) {
+        return undefined;
+      }
+      return parsed.command as ConsoleCommand;
+    } catch {
+      return undefined;
+    }
   }
 
   async #run(
     payload: string,
+    key: Buffer,
     instance: string,
     claim: (key: string, value: string) => Promise<unknown>,
     handler: (command: ConsoleCommand) => Promise<unknown>,
   ): Promise<void> {
-    let command: ConsoleCommand;
-    try {
-      command = JSON.parse(payload) as ConsoleCommand;
-    } catch {
+    const command = this.#verify(payload, key);
+    if (!command) return;
+    if (typeof command.id !== 'string' || command.id === '' || typeof command.verb !== 'string') {
       return;
     }
-    if (typeof command?.id !== 'string' || typeof command.verb !== 'string') return;
     const claimed = await claim(
       `${this.prefix}-${CONSOLE_TOPIC}-console-claim:${command.id}`,
       instance,
@@ -264,7 +391,11 @@ export class RedisConsoleChannel {
         },
       };
     }
-    await this.#client.publish(this.replyChannel, JSON.stringify(reply));
+    const body = wireShape(reply);
+    await this.#client.publish(
+      this.replyChannel,
+      JSON.stringify({ v: 1, reply: body, mac: macOf(key, 'reply', [this.prefix, body]) }),
+    );
   }
 
   /** Stop listening and fail the commands still waiting for an answer. */

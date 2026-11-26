@@ -286,20 +286,37 @@ export class CryptoConsole {
   /** What a command to another app carries: the viewer (the actor) and what it was granted. */
   async #commandMeta(ctx: HttpContext): Promise<CommandMeta> {
     const actor = await this.#actor(ctx);
-    const capabilities = this.#capabilities.get(ctx);
     return {
       actor: actor.id,
-      ...(capabilities !== undefined ? { capabilities } : {}),
+      // Always sent: the owning app refuses a command without them, and caps them with its own.
+      capabilities: this.#viewerCapabilities(ctx),
       ...(this.options.config.appLabel !== undefined ? { via: this.options.config.appLabel } : {}),
     };
   }
 
-  /** Everything the console does acts for the operator, with full rights: it is the server. */
+  /**
+   * What this viewer may do: the capabilities its `authorize` granted, or every capability when it
+   * named none (an authorizer that does not narrow keeps full console rights, as before).
+   */
+  #viewerCapabilities(ctx: HttpContext): string[] {
+    const granted = this.#capabilities.get(ctx);
+    return granted === undefined ? ['crypto:*'] : [...granted];
+  }
+
+  /**
+   * The principal the console acts with on its own partitions: the operator, with what `authorize`
+   * granted. Reading key metadata and the audit is part of being let in, so `crypto:keys:read` is
+   * always added; every other operation (create, rotate, policy, delete: `crypto:keys:manage`; a
+   * test: its operations; rewrap: `crypto:rewrap:<key>`) needs its own capability.
+   */
   async #principal(ctx: HttpContext): Promise<CryptoPrincipal> {
     const actor = await this.#actor(ctx);
+    const granted = this.#viewerCapabilities(ctx);
     return {
       partition: this.#partition(ctx),
-      capabilities: ['crypto:*'],
+      capabilities: granted.includes('crypto:keys:read')
+        ? granted
+        : [...granted, 'crypto:keys:read'],
       actor: actor.id,
     };
   }
@@ -396,6 +413,8 @@ export class CryptoConsole {
       defaultPartition,
       topology: this.options.topology,
       actor: actor.id,
+      // What this viewer may do (the server refuses the rest).
+      capabilities: this.#viewerCapabilities(ctx),
       ...(federated.length > 0
         ? { federated: federated.map((id) => this.options.federated!.describe(id)) }
         : {}),

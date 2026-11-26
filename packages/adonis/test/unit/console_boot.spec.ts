@@ -57,3 +57,47 @@ describe('console routes in a real app', () => {
     expect(() => router.commit()).not.toThrow();
   });
 });
+
+describe('federated console commands fail closed', () => {
+  async function bootStandalone(crypto: Record<string, unknown>) {
+    const root = await mkdtemp(join(tmpdir(), 'crypto-console-boot-'));
+    roots.push(root);
+    const ignitor = new IgnitorFactory()
+      .withCoreProviders()
+      .withCoreConfig()
+      .merge({
+        config: {
+          crypto: defineConfig({
+            topology: 'standalone',
+            app: 'et',
+            store: stores.memory(),
+            crypto: { keys: ['a-real-root-key-of-32-characters!'] },
+            ...crypto,
+          } as never),
+        },
+        rcFileContents: { providers: [() => import('../../providers/crypto_provider.js')] },
+      })
+      .create(pathToFileURL(`${root}/`));
+    const app = ignitor.createApp('web');
+    await app.init();
+    await app.boot();
+    return app;
+  }
+
+  it('a web process with consoleCommands and no secret refuses to start, naming the option', async () => {
+    const app = await bootStandalone({ consoleCommands: { prefix: 'et', actions: true } });
+    await expect(app.start(async () => {})).rejects.toThrow(/consoleCommands\.secret/);
+    await app.terminate().catch(() => {});
+  });
+
+  it('a web console whose federated app may act needs controlPlane.secret', async () => {
+    await expect(
+      bootStandalone({
+        console: {
+          authorize: () => ({ allowed: true }),
+          federatedApps: { et2: { store: { connection: 'x' }, controlPlane: { prefix: 'et2' } } },
+        },
+      }),
+    ).rejects.toThrow(/controlPlane\.secret/);
+  });
+});

@@ -377,8 +377,11 @@ export default class CryptoProvider {
     const registry = await readAgoraConsoles(this.app.container);
     if (config.federatedApps) {
       const redisConnections = redisConnectionsOf(this.app.config);
+      // Web only (where commands are sent): an entry that may act must carry the shared secret,
+      // or the boot fails here naming the line to add. Ace commands send none, so never fail them.
+      const requireSecret = this.app.getEnvironment() === 'web';
       for (const [key, entry] of Object.entries(config.federatedApps)) {
-        validateFederatedCryptoApp(key, entry, redisConnections);
+        validateFederatedCryptoApp(key, entry, redisConnections, { requireSecret });
       }
       const container = this.app.container;
       this.#federated = new FederatedCryptoApps(config.federatedApps, {
@@ -576,12 +579,20 @@ export default class CryptoProvider {
     const logger = await this.#logger();
     const service = this.#runtime?.service;
     if (!service) return;
+    // Fail closed: commands are only taken over a channel authenticated with a shared secret.
+    const secret = consoleCommandsSecret(options.secret);
+    if (secret === undefined) {
+      throw new Error(
+        "[@adonis-agora/crypto] consoleCommands needs `consoleCommands.secret` in config/crypto.ts (at least 16 characters, the same value as the console's `federatedApps.<app>.controlPlane.secret`), so commands from another console are authenticated. Remove `consoleCommands` if no other console manages this app.",
+      );
+    }
     try {
       const partitions =
         options.partitions ?? (this.#runtime?.partition ? [this.#runtime.partition] : undefined);
       const channel = new RedisConsoleChannel({
         client: await resolveRedisConnection(this.app.container, options.connection),
         prefix: options.prefix,
+        secret,
       });
       await channel.answer(
         cryptoConsoleCommandHandler({
@@ -618,4 +629,18 @@ export default class CryptoProvider {
     this.#building = undefined;
     this.#consoleConfig = undefined;
   }
+}
+
+/** `consoleCommands.secret` when it is usable (at least 16 characters), else `undefined`. */
+function consoleCommandsSecret(
+  secret: string | { release(): string } | undefined,
+): string | { release(): string } | undefined {
+  if (secret === undefined || secret === null) return undefined;
+  let raw: unknown;
+  try {
+    raw = typeof secret === 'string' ? secret : secret.release();
+  } catch {
+    return undefined;
+  }
+  return typeof raw === 'string' && raw.length >= 16 ? secret : undefined;
 }

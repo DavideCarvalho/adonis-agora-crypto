@@ -242,6 +242,13 @@ export interface CryptoConsoleCommandsConfig {
   capabilities?: string[];
   /** The partitions the other console may touch. Default: this app's own (`app`), else any. */
   partitions?: string[];
+  /**
+   * The secret this app and the other console share (the console's
+   * `federatedApps.<app>.controlPlane.secret`), at least 16 characters. Every command and answer
+   * carries an HMAC under it, commands older than a minute are refused and each one runs at most
+   * once. Required: without it the web process refuses to boot.
+   */
+  secret?: string | { release(): string };
 }
 
 /** An app that asks a central crypto server for every operation. */

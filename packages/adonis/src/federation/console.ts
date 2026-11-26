@@ -15,6 +15,7 @@ import type { CryptoKeyVersionRecord, CryptoStore } from '../store/store.js';
 import {
   APP_UNREACHABLE,
   type ConsoleCommand,
+  type ConsoleSecret,
   RedisConsoleChannel,
   type RedisLike,
 } from './redis_channel.js';
@@ -43,9 +44,13 @@ export interface FederatedCryptoAppConfig {
   store: { connection?: string | undefined; schema?: string | undefined } | CryptoStore;
   /**
    * Where that app answers (its `consoleCommands` in its config/crypto.ts): the `@adonisjs/redis`
-   * connection to publish on and the app's `prefix`.
+   * connection to publish on, the app's `prefix`, and the `secret` it shares with that app (its
+   * `consoleCommands.secret`, at least 16 characters). Every command and answer carries an HMAC
+   * under it; an entry that may act (`actions` not `false`) needs it.
    */
-  controlPlane: { connection?: string | undefined; prefix: string } | RedisConsoleChannel;
+  controlPlane:
+    | { connection?: string | undefined; prefix: string; secret?: ConsoleSecret | undefined }
+    | RedisConsoleChannel;
   /**
    * Send key operations to that app. Default `true`; `false` makes it read-only from here. The app
    * decides too: its `consoleCommands.actions`.
@@ -82,6 +87,7 @@ export function validateFederatedCryptoApp(
   key: string,
   entry: FederatedCryptoAppConfig,
   redisConnections: { names: string[]; default: string | undefined } | undefined,
+  options: { requireSecret?: boolean } = {},
 ): void {
   const fail = (message: string): never => {
     throw new Error(`[@adonis-agora/crypto] console.federatedApps["${key}"]: ${message}`);
@@ -97,6 +103,27 @@ export function validateFederatedCryptoApp(
     fail('`partition` must be a non-empty string');
   }
   const plane = entry.controlPlane;
+  // Key operations are only sent over an authenticated channel: an entry that may act needs the
+  // secret it shares with that app, or the boot fails here naming the line to add.
+  if (options.requireSecret && entry?.actions !== false) {
+    if (plane instanceof RedisConsoleChannel) {
+      if (!plane.authenticated) {
+        fail('the RedisConsoleChannel passed as `controlPlane` needs a `secret`');
+      }
+    } else if (plane && typeof plane === 'object') {
+      const raw =
+        typeof plane.secret === 'string'
+          ? plane.secret
+          : typeof plane.secret?.release === 'function'
+            ? plane.secret.release()
+            : undefined;
+      if (typeof raw !== 'string' || raw.length < 16) {
+        fail(
+          "`controlPlane.secret` is required (at least 16 characters, the same value as that app's `consoleCommands.secret`), or set `actions: false` to keep this app read-only here",
+        );
+      }
+    }
+  }
   if (!(plane instanceof RedisConsoleChannel)) {
     if (!plane || typeof plane !== 'object') {
       fail('`controlPlane` is required ({ connection, prefix })');
@@ -288,10 +315,14 @@ class CommandError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly code?: string,
   ) {
     super(message);
   }
 }
+
+/** The error code of a command that carried no viewer capabilities. */
+export const CAPABILITIES_REQUIRED = 'capabilities-required';
 
 export interface CryptoConsoleCommandHandlerOptions {
   /** This app's crypto service (its store, its root key, its audit). */
@@ -350,14 +381,22 @@ export function cryptoConsoleCommandHandler(
       );
     }
     const name = text(body.name, 'name');
+    // The console always sends what its `authorize` granted the viewer: no capabilities, no command.
+    const viewer = command.capabilities;
+    if (!Array.isArray(viewer)) {
+      throw new CommandError(
+        'crypto: the console sent no viewer capabilities',
+        403,
+        CAPABILITIES_REQUIRED,
+      );
+    }
     const actor =
       typeof command.actor === 'string' && command.actor !== '' ? command.actor : 'console';
     const via = typeof command.via === 'string' && command.via !== '' ? command.via : 'federated';
     // What this app allows, narrowed by the viewer's grant: an operation needs both.
-    const viewer = command.capabilities;
     const principal: CryptoPrincipal = {
       partition,
-      capabilities: viewer === undefined ? allowed : narrow(allowed, viewer),
+      capabilities: narrow(allowed, viewer),
       actor,
       clientId: `console:${via}`,
     };
@@ -433,7 +472,8 @@ function narrow(allowed: readonly string[], viewer: readonly string[]): string[]
 /** What the console sends with a command, besides its arguments. */
 export interface CommandMeta {
   actor: string;
-  capabilities?: string[] | undefined;
+  /** The viewer's capabilities (always sent: the owning app refuses a command without them). */
+  capabilities: string[];
   via?: string | undefined;
 }
 
@@ -495,7 +535,7 @@ export class FederatedCryptoApp {
           verb,
           args: [{ ...args, partition: this.partition, name }],
           actor: meta.actor,
-          ...(meta.capabilities !== undefined ? { capabilities: meta.capabilities } : {}),
+          capabilities: meta.capabilities,
           ...(meta.via !== undefined ? { via: meta.via } : {}),
         },
         this.timeoutMs !== undefined ? { timeoutMs: this.timeoutMs } : {},
@@ -573,6 +613,9 @@ export async function buildFederatedCryptoApp(
       : new RedisConsoleChannel({
           client: await deps.redis(config.controlPlane.connection),
           prefix: config.controlPlane.prefix,
+          ...(config.controlPlane.secret !== undefined
+            ? { secret: config.controlPlane.secret }
+            : {}),
         });
   return new FederatedCryptoApp({
     id,
