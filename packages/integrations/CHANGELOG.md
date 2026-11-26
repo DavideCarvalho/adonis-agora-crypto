@@ -1,5 +1,12 @@
 # @adonis-agora/crypto-integrations
 
+## 0.4.1
+
+### Patch Changes
+
+- Updated dependencies [[`61a901f`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/61a901fbb3ad7adf65c67f2f2588e0fd53934a00)]:
+  - @adonis-agora/crypto@0.14.0
+
 ## 0.4.0
 
 ### Minor Changes
