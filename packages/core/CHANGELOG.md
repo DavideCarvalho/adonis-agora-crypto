@@ -1,5 +1,28 @@
 # @adonis-agora/crypto-core
 
+## 1.0.0-rc.2
+
+### Minor Changes
+
+- [`ede8939`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/ede8939d298d3a611dc172bb2e0c8b58b971f45f) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Security: federated console commands are authenticated. Before, anyone who could publish on the app's Redis could rotate, delete or re-policy its keys (flip `exportable` / `deletionAllowed`) with any actor and capabilities, and forge the answers.
+  
+  **Breaking:** an app's `consoleCommands` must resolve a mode, or its web process fails at boot with the line to add (ace commands are not affected). The console side needs nothing:
+  
+  - **Crypto, automatic on the console:** the console (which always runs a crypto server) seals every command with its own `aes256-gcm` key `console-crypto` in the federated app's partition, created at boot (`controlPlane.crypto: false` turns that off). The owning app opens it with `consoleCommands.crypto: { cipher }`, a client of the console's crypto server for its partition, with no grant: a crypto server lets an app decrypt with the `console-*` keys of its own partition implicitly (decrypt only, never another partition's; an explicit `crypto:decrypt:console-*` is harmless). The app cannot pick this by itself: it runs its own crypto server, not the console's. `crypto.owns` lets a third-party cipher (KMS, Vault, HSM) recognize its ciphertext format.
+  - **authkit app-call tokens, automatic:** with `@adonis-agora/authkit-client` booted (`apps` on the console, `service` on the app), each command carries the console app's app-call token and the app verifies it; what authkit granted the console app on the app (`crypto:console:*`, or finer) caps it. `controlPlane.token: false` / `consoleCommands.verifyTenant: false` turn it off.
+  - **Token (explicit):** `controlPlane.token` + `consoleCommands.verifyTenant` (a control plane falls back to its own), sealed to the app's own X25519 `console-commands` key, read from the app's store.
+  - **Shared secret:** the same `secret` on both sides (HMAC on every command and answer).
+  
+  In every mode commands over a minute old and replays are refused, answers are authenticated, and a refused token answers `401`. Also breaking: the default crypto key is renamed `crypto-console` → `console-crypto`; a control plane's `consoleCommands` serves no partition until `partitions` lists them; an app refuses a command without capabilities (403, code `capabilities-required`; the console always sends the viewer's, narrowed to the crypto console set, the whole set when `authorize` does not narrow); `crypto:console:read` / `:write` / `:*` work as aliases on tokens and viewer capabilities (compared literally); refusals name who lacks the capability (the viewer, the console's token, or the app's `consoleCommands.capabilities`); no console command may touch the `console-commands` or crypto-mode key.
+  
+  **Breaking (console):** the console's own partitions now honor `authorize`'s `capabilities` (before, only federated commands did, so a viewer granted `crypto:keys:read` could still create, rotate, re-policy and delete keys locally). Create, rotate, policy and delete need `crypto:keys:manage` (403 with a clear message), a test the key's operations, a rewrap `crypto:rewrap:<key>`; reading metadata and the audit stays allowed to everyone let in. An `authorize` that returns no `capabilities` keeps the whole console set. `authorize` answers take the shape shared by every Agora console (`{ allowed, apps?, tenants?, capabilities?, access? }`; malformed `capabilities` grant nothing, `access: 'read'` keeps reading only (no key test), `anyAuthorize` keeps the deciding grant); `authorizeByToken` takes the same grant (`access`, `apps`, `tenants`, `capabilities`). `/meta` returns the viewer's `capabilities` and the page disables what the viewer may not do.
+  
+  New: `encrypt` takes an optional `partition` to seal with another partition's key (HTTP, broker transports, service, `CryptoClient`): encrypt only, with an explicit `crypto:seal:<key>` grant (`crypto:*` does not count), audited in the target partition. Every other operation refuses another partition. Clients report a server that predates it instead of returning an unopenable ciphertext. A missing `console-*` key in the target partition is created there (`aes256-gcm`) by the first seal, audited as a creation by the sealing caller (`metadata.provisionedBy: 'seal'`), so separate apps coordinate console keys by themselves; `sealProvisioning: false` turns that off.
+  
+  New doctor checks: `crypto.console-commands` (resolved modes, error when unauthenticated) and `crypto.console-commands-key` (deep: keys exist and round-trip).
+  
+  New: `hasKey({ key })` on every crypto operations surface (in process, `CryptoClient`, the broker transports; `POST /v1/has-key`): whether a key exists in the caller's own partition, with decrypt's authorization (an app's own `console-*` keys need none), `false` when missing, never audited. The console key checks use it instead of a decrypt probe, so a boot no longer writes `decrypt` error rows. In crypto mode an automatic authkit app-call token that cannot be minted no longer blocks a command: it goes crypto-only, with one warning naming the grant, and is retried after 5 minutes.
+
 ## 1.0.0-rc.1
 
 ### Minor Changes
