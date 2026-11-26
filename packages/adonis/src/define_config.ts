@@ -10,6 +10,7 @@ import type {
   TenantTokenSource,
 } from '@adonis-agora/crypto-core';
 import type { CryptoKeyringConfig } from './crypto/keyring.js';
+import type { ConsoleCryptoOptions } from './federation/redis_channel.js';
 import { describeStackUse, hasLucidConnection, lucidUse, type StackUse } from './stack.js';
 import { LucidStore } from './store/lucid_store.js';
 import { MemoryStore } from './store/memory_store.js';
@@ -147,6 +148,13 @@ interface BaseConfig {
   crypto?: CryptoKeyringConfig;
   /** Batch ceiling for the batch endpoints. Default `100`. */
   maxBatchSize?: number;
+  /**
+   * When another app seals for one of this server's partitions (`encrypt` with `partition`, a
+   * `crypto:seal:<key>` grant) with a `console-*` key that does not exist there yet, create it
+   * (`aes256-gcm`) and seal, instead of answering 404: the Agora consoles' keys provision
+   * themselves on the first command. `false` turns that off. Default `true`.
+   */
+  sealProvisioning?: boolean;
   /** App-to-app encryption (interceptor + middleware). Nothing is installed when this is absent. */
   envelope?: CryptoEnvelopeConfig;
   /** Per-subject keys and encrypted columns. Nothing is set up when this is absent. */
@@ -175,7 +183,7 @@ export interface StandaloneConfig extends BaseConfig {
    * never a command. Needs `@adonisjs/redis`. Off when omitted.
    *
    * ```ts
-   * consoleCommands: { connection: 'main', prefix: 'entretextos', actions: true },
+   * consoleCommands: { connection: 'main', prefix: 'entretextos', verifyTenant, actions: true },
    * ```
    */
   consoleCommands?: CryptoConsoleCommandsConfig;
@@ -217,7 +225,7 @@ export interface ControlPlaneConfig extends BaseConfig {
    * never a command. Needs `@adonisjs/redis`. Off when omitted.
    *
    * ```ts
-   * consoleCommands: { connection: 'main', prefix: 'entretextos', actions: true },
+   * consoleCommands: { connection: 'main', prefix: 'entretextos', verifyTenant, actions: true },
    * ```
    */
   consoleCommands?: CryptoConsoleCommandsConfig;
@@ -240,8 +248,50 @@ export interface CryptoConsoleCommandsConfig {
    * (what the key test and rewrap use). `crypto:keys:export` is always dropped.
    */
   capabilities?: string[];
-  /** The partitions the other console may touch. Default: this app's own (`app`), else any. */
+  /**
+   * The partitions the other console may touch. Default: this app's own (`app`). A control plane
+   * (no `app` of its own) answers for none until you list them.
+   */
   partitions?: string[];
+  /**
+   * How this app tells a real console from anyone who can publish on Redis. One of `crypto`,
+   * `verifyTenant` (a control plane's own, or authkit-client's app-caller verifier, count) or
+   * `secret` is required: without any, the web process fails at boot (ace commands, which never
+   * answer, are not affected). Every mode that resolves is accepted at once.
+   *
+   * This app runs its own crypto server, so — unlike the other Agora libs — it cannot pick crypto
+   * mode by itself: the console's crypto (the Hub's) is another server, reached through a client
+   * you configure here. The console side needs nothing: it seals with its own `console-crypto` key
+   * in this app's partition automatically.
+   *
+   * Token mode (with authkit): `verifyTenant` checks the token each command carries, e.g.
+   * `authkitTenantVerifier({ issuer, resource: 'urn:agora:crypto' })`. The token's `partition`
+   * must be the app the command is for, and its capabilities cap what the console may do
+   * (`crypto:keys:manage` for create, rotate, policy and delete; the key's operations for a test;
+   * `crypto:rewrap:<key>` for a rewrap). Commands arrive sealed to this app's `console-commands`
+   * key (an X25519 key created at boot in each served partition), whose public half the console
+   * reads from this app's store. When this is not set, a control plane uses its own
+   * `verifyTenant`, and @adonis-agora/authkit-client's app-caller verifier (its `service` config)
+   * checks authkit app-call tokens: the console app needs `crypto:console:*` (or finer
+   * `crypto:keys:manage`, …) on this app in authkit. `false` turns both off.
+   */
+  verifyTenant?: TenantVerifierInput | false;
+  /**
+   * Sealed with a crypto key: commands arrive encrypted with an `aes256-gcm` key (`console-crypto`
+   * by default) in this app's partition of the crypto server that holds it, which this app may
+   * `decrypt` and the console may `encrypt`. Usually that server is the Hub's (the console seals
+   * with it automatically): `cipher` is then a client of it, e.g. `createCryptoClient({ url,
+   * partition: '<this app>', token })` (no grant needed: an app opens its own `console-*` keys). With
+   * `verifyTenant` set too, each command must also carry a valid token; without it, whoever may
+   * encrypt with the key is the console. `false` is the same as leaving it out.
+   */
+  crypto?: ConsoleCryptoOptions | false;
+  /**
+   * Shared-secret mode (no authkit): the secret this app and the console share (the console's
+   * `federatedApps.<app>.controlPlane.secret`), at least 16 characters. Every command and answer
+   * carries an HMAC under it.
+   */
+  secret?: string | { release(): string };
 }
 
 /** An app that asks a central crypto server for every operation. */

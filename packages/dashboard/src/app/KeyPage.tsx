@@ -7,6 +7,7 @@ import { Button } from '../agora-kit/ui/button';
 import { Input } from '../agora-kit/ui/input';
 import { Skeleton } from '../agora-kit/ui/skeleton';
 import type { KeyTestResult, KeyVersion } from '../client/crypto-client';
+import { testDeniedReason } from './capabilities';
 import { useConsole } from './console-context';
 import { exactTime, relativeTime, shortKid, versionTone } from './format';
 
@@ -54,7 +55,7 @@ const columns: Column<KeyVersion>[] = [
 ];
 
 export function KeyPage({ name, onBack }: { name: string; onBack: () => void }) {
-  const { api, partition, readOnly } = useConsole();
+  const { api, meta, partition, readOnly, cannotManage } = useConsole();
   const client = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [tested, setTested] = useState<KeyTestResult | null>(null);
@@ -106,6 +107,8 @@ export function KeyPage({ name, onBack }: { name: string; onBack: () => void }) 
     },
   });
 
+  const cannotTest = readOnly ?? testDeniedReason(meta.capabilities, name, key.data?.type);
+
   return (
     <>
       <PageHeader
@@ -119,18 +122,18 @@ export function KeyPage({ name, onBack }: { name: string; onBack: () => void }) 
             <Button
               variant="secondary"
               disabled={
-                test.isPending || readOnly !== undefined || key.data?.deletedAt !== undefined
+                test.isPending || cannotTest !== undefined || key.data?.deletedAt !== undefined
               }
-              title={readOnly ?? 'Run this key once with a random probe (audited)'}
+              title={cannotTest ?? 'Run this key once with a random probe (audited)'}
               onClick={() => test.mutate()}
             >
               {test.isPending ? 'Testing…' : 'Test'}
             </Button>
             <Button
               disabled={
-                rotate.isPending || readOnly !== undefined || key.data?.deletedAt !== undefined
+                rotate.isPending || cannotManage !== undefined || key.data?.deletedAt !== undefined
               }
-              title={readOnly}
+              title={cannotManage}
               onClick={() => rotate.mutate()}
             >
               Rotate
@@ -220,7 +223,9 @@ export function KeyPage({ name, onBack }: { name: string; onBack: () => void }) 
                       />
                       <Button
                         size="sm"
-                        disabled={floor.trim() === '' || policy.isPending || readOnly !== undefined}
+                        disabled={
+                          floor.trim() === '' || policy.isPending || cannotManage !== undefined
+                        }
                         onClick={() => {
                           const value = Number(floor);
                           policy.mutate({ minDecryptionVersion: value });
@@ -247,7 +252,7 @@ export function KeyPage({ name, onBack }: { name: string; onBack: () => void }) 
                       <Button
                         size="sm"
                         disabled={
-                          description === null || policy.isPending || readOnly !== undefined
+                          description === null || policy.isPending || cannotManage !== undefined
                         }
                         onClick={() => {
                           policy.mutate({ description: description === '' ? null : description });
@@ -262,7 +267,7 @@ export function KeyPage({ name, onBack }: { name: string; onBack: () => void }) 
                     <Button
                       size="sm"
                       variant={data.deletionAllowed ? 'ghost' : 'secondary'}
-                      disabled={policy.isPending || readOnly !== undefined}
+                      disabled={policy.isPending || cannotManage !== undefined}
                       onClick={() => policy.mutate({ deletionAllowed: !data.deletionAllowed })}
                     >
                       {data.deletionAllowed ? 'Forbid deletion' : 'Allow deletion'}
@@ -270,7 +275,7 @@ export function KeyPage({ name, onBack }: { name: string; onBack: () => void }) 
                     <Button
                       size="sm"
                       variant={data.exportable ? 'ghost' : 'secondary'}
-                      disabled={policy.isPending || readOnly !== undefined}
+                      disabled={policy.isPending || cannotManage !== undefined}
                       onClick={() => policy.mutate({ exportable: !data.exportable })}
                     >
                       {data.exportable ? 'Forbid export' : 'Allow export'}

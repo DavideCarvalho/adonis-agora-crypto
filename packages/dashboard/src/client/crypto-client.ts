@@ -111,6 +111,11 @@ export interface Meta {
   actor: string;
   keyTypes: KeyType[];
   capabilityLegend: string[];
+  /**
+   * What this viewer may do here (its `authorize` grant, `['crypto:*']` when it does not narrow).
+   * Older servers omit it: then everything is offered and the server still refuses.
+   */
+  capabilities?: string[];
 }
 
 export interface KeyInput {

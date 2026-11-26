@@ -5,9 +5,9 @@ import type { ApplicationService } from '@adonisjs/core/types';
 import { createCryptoKeyring, type EncrypterLike, type Keyring } from '../src/crypto/keyring.js';
 import { CryptoService } from '../src/crypto/service.js';
 import { CryptoConsole, cryptoConsoleSearchFor } from '../src/dashboard/console.js';
+import { consoleAppAllowed } from '../src/dashboard/console_apps.js';
 import {
   type ConsoleAuthorizeDecision,
-  consoleAppAllowed,
   resolveConsoleAuthorize,
 } from '../src/dashboard/console_authorize.js';
 import { readAgoraConsoles, registerAgoraConsole } from '../src/dashboard/console_switcher.js';
@@ -29,11 +29,27 @@ import { registerCryptoDevTools } from '../src/dev_tools.js';
 import { registerDoctorChecks } from '../src/doctor/agora_doctor.js';
 import { agoraDoctorChecks } from '../src/doctor/checks.js';
 import {
+  CONSOLE_COMMAND_KEY,
+  commandKeyOpener,
   cryptoConsoleCommandHandler,
+  ensureConsoleCommandKey,
   FederatedCryptoApps,
   validateFederatedCryptoApp,
 } from '../src/federation/console.js';
 import {
+  type AppCommandModes,
+  type AuthkitClientLike,
+  appUnauthenticatedMessage,
+  authkitClientOf,
+  ConsoleAuthConfigError,
+  consoleUnauthenticatedMessage,
+  ensureConsoleCryptoKey,
+  resolveAppCommandModes,
+  resolveConsoleSideMode,
+  tokenUnavailableLog,
+} from '../src/federation/console_modes.js';
+import {
+  CONSOLE_CRYPTO_KEY,
   RedisConsoleChannel,
   redisConnectionsOf,
   resolveRedisConnection,
@@ -182,6 +198,9 @@ export default class CryptoProvider {
       store,
       keyring,
       ...(config.maxBatchSize !== undefined ? { maxBatchSize: config.maxBatchSize } : {}),
+      ...(config.sealProvisioning !== undefined
+        ? { sealProvisioning: config.sealProvisioning }
+        : {}),
     });
     const partition =
       (config.topology ?? 'standalone') === 'standalone'
@@ -381,7 +400,30 @@ export default class CryptoProvider {
         validateFederatedCryptoApp(key, entry, redisConnections);
       }
       const container = this.app.container;
+      const web = this.app.getEnvironment() === 'web';
+      const authkit = await this.#authkit();
+      for (const [key, entry] of Object.entries(config.federatedApps)) {
+        const mode = resolveConsoleSideMode(key, entry, { authkit, hasService: true });
+        // A web process fails at boot, never on the first click; ace commands send nothing.
+        if (mode.kind === 'unauthenticated' && web) {
+          throw new ConsoleAuthConfigError(consoleUnauthenticatedMessage(key, entry));
+        }
+        if (web) {
+          logger.info(`[@adonis-agora/crypto] console commands to "${key}": ${mode.describe}`);
+        }
+      }
       this.#federated = new FederatedCryptoApps(config.federatedApps, {
+        service,
+        onTokenUnavailable: (id, partition, reason) => {
+          const { level, line } = tokenUnavailableLog(id, partition, reason);
+          if (level === 'info') logger.info(line);
+          else logger.warn(line);
+        },
+        ...(authkit ? { authkit } : {}),
+        onKeyCreated: (partition, key) =>
+          logger.info(
+            `[@adonis-agora/crypto] console commands: created the crypto key "${key}" in partition ${partition}`,
+          ),
         async db(connection) {
           if (!container.hasBinding('lucid.db')) {
             throw new Error('the federated console reads other apps through @adonisjs/lucid');
@@ -477,6 +519,9 @@ export default class CryptoProvider {
       if (this.#consoleConfig?.enabled) await this.#registerDevTools();
     }
     await this.#installEnvelope(runtime, logger);
+    await this.#resolveConsoleCommands();
+    // Console side: the console-crypto keys exist before the first command (web only).
+    if (this.app.getEnvironment() === 'web') await this.#ensureConsoleCryptoKeys();
     await this.app.booted(async () => {
       if (!runtime.api) return;
       const router = await this.app.container.make('router');
@@ -571,38 +616,174 @@ export default class CryptoProvider {
   async ready(): Promise<void> {
     const config = this.app.config.get<CryptoConfig | undefined>('crypto');
     if (!config || config.topology === 'tenant') return;
+    if (this.app.getEnvironment() !== 'web') return;
     const options = config.consoleCommands;
-    if (!options || this.app.getEnvironment() !== 'web') return;
+    if (!options) return;
     const logger = await this.#logger();
     const service = this.#runtime?.service;
     if (!service) return;
+    const modes = this.#appModes;
+    if (!modes) return;
+    const { sealedToApp } = modes;
     try {
+      // Never "every partition" by default: a control plane (no app of its own) lists them.
       const partitions =
-        options.partitions ?? (this.#runtime?.partition ? [this.#runtime.partition] : undefined);
+        options.partitions ?? (this.#runtime?.partition ? [this.#runtime.partition] : []);
+      if (partitions.length === 0) {
+        logger.warn(
+          '[@adonis-agora/crypto] consoleCommands: no `partitions` and no app of its own, so this app answers for none; list them in consoleCommands.partitions',
+        );
+      }
+      if (sealedToApp) {
+        // The console seals each command (and its token) to the public half of this key, read
+        // from this app's store, never from Redis.
+        // Never fails the boot: a missing key only refuses token-mode commands until it exists.
+        for (const partition of partitions) {
+          try {
+            const made = await ensureConsoleCommandKey(service, partition);
+            if (made === 'created') {
+              logger.info(
+                `[@adonis-agora/crypto] console commands: created ${partition}/${CONSOLE_COMMAND_KEY} (token mode)`,
+              );
+            }
+          } catch (error) {
+            logger.warn(
+              `[@adonis-agora/crypto] console commands: could not create ${partition}/${CONSOLE_COMMAND_KEY} (${error instanceof Error ? error.message : String(error)}); run \`node ace crypto:keys:create ${CONSOLE_COMMAND_KEY} --type x25519 --application ${partition}\``,
+            );
+          }
+        }
+      }
       const channel = new RedisConsoleChannel({
         client: await resolveRedisConnection(this.app.container, options.connection),
         prefix: options.prefix,
+        ...(modes.secret !== undefined ? { secret: modes.secret } : {}),
+        ...(modes.crypto !== undefined ? { crypto: modes.crypto } : {}),
+        ...(modes.cryptoToken !== undefined ? { cryptoToken: modes.cryptoToken } : {}),
+        ...(modes.verifyTenant !== undefined ? { verifyTenant: modes.verifyTenant } : {}),
+        ...(modes.verifyAppCall !== undefined ? { verifyAppCall: modes.verifyAppCall } : {}),
+        ...(sealedToApp ? { opener: commandKeyOpener(service, partitions) } : {}),
       });
+      const seen = new Set<unknown>();
       await channel.answer(
         cryptoConsoleCommandHandler({
           service,
           actions: options.actions === true,
           ...(options.capabilities ? { capabilities: options.capabilities } : {}),
-          ...(partitions ? { partitions } : {}),
+          partitions,
+          protectedKeys: [
+            CONSOLE_COMMAND_KEY,
+            ...(modes.crypto ? [modes.crypto.key ?? CONSOLE_CRYPTO_KEY] : []),
+          ],
           log: (line) => logger.info(line),
         }),
         {
-          onError: (error) =>
-            logger.warn(
-              `[@adonis-agora/crypto] federated console command failed: ${error instanceof Error ? error.message : String(error)}`,
-            ),
+          // Logged once per reason (a flood of garbage logs one line), then dropped.
+          onRefused: (reason) => {
+            if (seen.has(reason)) return;
+            if (seen.size < 100) seen.add(reason);
+            logger.warn(`[@adonis-agora/crypto] console commands: refused a command (${reason})`);
+          },
+          onError: (error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            const reason = (error as { code?: unknown })?.code ?? message;
+            if (seen.has(reason)) return;
+            if (seen.size < 100) seen.add(reason);
+            logger.warn(`[@adonis-agora/crypto] federated console command dropped: ${message}`);
+          },
         },
       );
       this.#consoleChannel = channel;
+      // The command key as a short id only (its public half is in this app's store).
+      const sealedTo = sealedToApp
+        ? (
+            await Promise.all(
+              partitions.map(async (partition) => {
+                const record = await service.store.getKey(partition, CONSOLE_COMMAND_KEY);
+                const version = record
+                  ? await service.store.version(
+                      partition,
+                      CONSOLE_COMMAND_KEY,
+                      record.latestVersion,
+                    )
+                  : null;
+                const kid = version?.publicKey?.kid;
+                return `key ${kid ? kid.slice(0, 8) : '(not created yet)'}`;
+              }),
+            )
+          ).join(', ')
+        : '';
+      const line = modes.modes.map((mode) => mode.replace('{sealedTo}', sealedTo)).join(' + ');
+      logger.info(
+        `[@adonis-agora/crypto] console commands: ${line}; ${options.actions === true ? 'actions on' : 'actions off (set consoleCommands.actions to let the console act)'}`,
+      );
+      if (sealedToApp && partitions[0] !== undefined) {
+        logger.info(
+          `[@adonis-agora/crypto] console commands: the full public key: node ace crypto:keys:public-key ${CONSOLE_COMMAND_KEY} --application ${partitions[0]}`,
+        );
+      }
     } catch (error) {
       logger.warn(
         `[@adonis-agora/crypto] consoleCommands is on, but ${error instanceof Error ? error.message : String(error)}`,
       );
+    }
+  }
+
+  #authkitClient: Promise<AuthkitClientLike | undefined> | undefined;
+  /** What `consoleCommands` accepts, resolved in `boot()` (web only) and started in `ready()`. */
+  #appModes: AppCommandModes | undefined;
+
+  /**
+   * `consoleCommands`, resolved at boot of a web process so a misconfiguration fails before the
+   * HTTP server listens (Adonis runs `ready()` after that). Other environments start no channel.
+   */
+  async #resolveConsoleCommands(): Promise<void> {
+    this.#appModes = undefined;
+    const config = this.app.config.get<CryptoConfig | undefined>('crypto');
+    if (!config || config.topology === 'tenant' || !config.consoleCommands) return;
+    if (this.app.getEnvironment() !== 'web') return;
+    const modes = resolveAppCommandModes(config, { authkit: await this.#authkit() });
+    if (!modes || modes.modes.length === 0)
+      throw new ConsoleAuthConfigError(appUnauthenticatedMessage(config));
+    this.#appModes = modes;
+  }
+
+  /**
+   * `@adonis-agora/authkit-client`, when this app boots it (detected, never imported). One that is
+   * installed but fails to boot fails a web process (its tokens were meant to authenticate console
+   * commands); elsewhere it is ignored.
+   */
+  #authkit(): Promise<AuthkitClientLike | undefined> {
+    this.#authkitClient ??= authkitClientOf(this.app.container).catch((error: unknown) => {
+      if (this.app.getEnvironment() === 'web') throw error;
+      return undefined;
+    });
+    return this.#authkitClient;
+  }
+
+  /**
+   * Console side, automatic crypto mode: each federated app's `console-crypto` key, created in its
+   * partition of this server at boot (web only) so the app can be granted it and the doctor finds
+   * it. Best effort: the first command creates it too.
+   */
+  async #ensureConsoleCryptoKeys(): Promise<void> {
+    const apps = this.#consoleConfig?.enabled ? this.#consoleConfig.federatedApps : undefined;
+    const service = this.#runtime?.service;
+    if (!apps || !service) return;
+    const logger = await this.#logger();
+    for (const [key, entry] of Object.entries(apps)) {
+      const mode = resolveConsoleSideMode(key, entry, { hasService: true });
+      if (mode.kind !== 'crypto-auto') continue;
+      try {
+        if ((await ensureConsoleCryptoKey(service, mode.partition, mode.key)) === 'created') {
+          logger.info(
+            `[@adonis-agora/crypto] console commands: created the crypto key "${mode.key}" in partition ${mode.partition}`,
+          );
+        }
+      } catch (error) {
+        logger.warn(
+          `[@adonis-agora/crypto] console commands to "${key}": could not create ${mode.partition}/${mode.key} (${error instanceof Error ? error.message : String(error)}); it is retried on the first command, or run \`node ace crypto:keys:create ${mode.key} --type aes256-gcm --application ${mode.partition}\``,
+        );
+      }
     }
   }
 
@@ -617,5 +798,7 @@ export default class CryptoProvider {
     this.#runtime = undefined;
     this.#building = undefined;
     this.#consoleConfig = undefined;
+    this.#authkitClient = undefined;
+    this.#appModes = undefined;
   }
 }

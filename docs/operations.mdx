@@ -93,6 +93,19 @@ import { sealTo } from '@adonis-agora/crypto/…' // or the app's own crypto-kit
 const sealed = sealTo(jwk, 'only the server opens this')
 ```
 
+## Does a key exist?
+
+```ts
+const exists = await crypto.hasKey({ key: 'console-flags' }) // true | false
+```
+
+Whether a key exists (and is not deleted) in the caller's own partition. The same authorization as
+`decrypt` on it — an app's own `console-*` keys need no grant — and a refusal is the same
+`forbidden`; a missing key is `false`. Nothing is written to the audit trail, so a boot-time check
+(every Agora lib's console key check uses it, falling back to a decrypt probe on an older server)
+leaves no error rows behind. In process, over HTTP (`CryptoClient.hasKey`) and over the broker
+transports (`keys.has`).
+
 ## Batches
 
 `encrypt`, `decrypt`, `sign` and `verify` have batch variants (at most 100 items). Answers are in
@@ -121,6 +134,7 @@ const { results } = await client.encryptBatch([
 | public key / JWKS | `GET /_crypto/v1/keys/:name/public`, `GET /_crypto/v1/keys/:name/jwks` |
 | export | `GET /_crypto/v1/keys/:name/export?version=` |
 | audit | `GET /_crypto/v1/audit` |
+| key exists | `POST /_crypto/v1/has-key` (`{ key }` → `{ key, exists }`) |
 | identity | `GET /_crypto/v1/whoami` |
 
 List endpoints follow the Agora list wire format: `page`, `size`, `sort=-createdAt`,

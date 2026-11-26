@@ -1,8 +1,20 @@
+import { randomUUID } from 'node:crypto';
 import { createCryptoClient } from '@adonis-agora/crypto-core';
 import type { ApplicationService } from '@adonisjs/core/types';
 import { openMaterial } from '../crypto/material.js';
 import { materialStatus } from '../crypto/reseal.js';
+import type { CryptoService } from '../crypto/service.js';
+import { resolveDashboardConfig } from '../dashboard/define_config.js';
 import type { CryptoConfig, TenantTopologyConfig } from '../define_config.js';
+import { CONSOLE_COMMAND_KEY } from '../federation/console.js';
+import {
+  appUnauthenticatedMessage,
+  authkitClientOf,
+  consoleUnauthenticatedMessage,
+  resolveAppCommandModes,
+  resolveConsoleSideMode,
+} from '../federation/console_modes.js';
+import { CONSOLE_CRYPTO_KEY, type ConsoleCipherSource } from '../federation/redis_channel.js';
 import type { CryptoRuntime } from '../runtime.js';
 import { getRuntime, hasRuntime } from '../services/accessor.js';
 import { legacyPlaintextColumns, legacyPlaintextReads } from '../subjects/lucid.js';
@@ -270,6 +282,126 @@ export const agoraDoctorChecks: AgoraDoctorCheck[] = [
     },
   },
   {
+    id: 'crypto.console-commands',
+    lib: 'crypto',
+    title: 'Console commands authenticated',
+    run: async (app): Promise<AgoraDoctorResult | AgoraDoctorResult[]> => {
+      const config = configOf(app);
+      if (!config) return notBooted();
+      if (config.topology === 'tenant') {
+        return { status: 'skip', message: 'A tenant neither answers nor sends console commands.' };
+      }
+      const authkit = await authkitClientOf(app.container).catch(() => undefined);
+      const results: AgoraDoctorResult[] = [];
+      const modes = resolveAppCommandModes(config, { authkit });
+      const sealedTo = modes?.sealedToApp ? await commandKeyIds(config) : '';
+      if (modes) {
+        results.push(
+          modes.modes.length > 0
+            ? {
+                status: 'ok',
+                message: `console commands: ${modes.modes.map((m) => m.replace('{sealedTo}', sealedTo)).join(' + ')}; ${config.consoleCommands?.actions === true ? 'actions on' : 'actions off (set consoleCommands.actions to let the console act)'}.`,
+              }
+            : {
+                status: 'error',
+                message: 'consoleCommands is set but accepts no authenticated command.',
+                fix: appUnauthenticatedMessage(config),
+                docs: `${DOCS}/federated-console#authenticating-the-console`,
+              },
+        );
+      }
+      const apps = resolveDashboardConfig(config.console).enabled
+        ? resolveDashboardConfig(config.console).federatedApps
+        : undefined;
+      for (const [id, entry] of Object.entries(apps ?? {})) {
+        const mode = resolveConsoleSideMode(id, entry, { authkit, hasService: true });
+        results.push(
+          mode.kind === 'unauthenticated'
+            ? {
+                status: 'error',
+                message: `Commands to the federated app "${id}" are unauthenticated.`,
+                fix: consoleUnauthenticatedMessage(id, entry),
+                docs: `${DOCS}/federated-console#authenticating-the-console`,
+              }
+            : { status: 'ok', message: `console commands to "${id}": ${mode.describe}.` },
+        );
+      }
+      if (results.length === 0) {
+        return { status: 'skip', message: 'No consoleCommands and no console.federatedApps.' };
+      }
+      return results;
+    },
+  },
+  {
+    id: 'crypto.console-commands-key',
+    lib: 'crypto',
+    title: 'Console command keys usable',
+    cost: 'deep',
+    run: async (app): Promise<AgoraDoctorResult | AgoraDoctorResult[]> => {
+      const config = configOf(app);
+      if (!config) return notBooted();
+      if (config.topology === 'tenant') {
+        return { status: 'skip', message: 'A tenant neither answers nor sends console commands.' };
+      }
+      const runtime = runtimeOf();
+      const service = runtime?.service;
+      if (!service) {
+        return { status: 'skip', message: 'The crypto provider is not booted in this process.' };
+      }
+      const results: AgoraDoctorResult[] = [];
+      const docs = `${DOCS}/federated-console#authenticating-the-console`;
+      // Console side: this server's console-crypto key in each federated app's partition.
+      const apps = resolveDashboardConfig(config.console).enabled
+        ? resolveDashboardConfig(config.console).federatedApps
+        : undefined;
+      for (const [id, entry] of Object.entries(apps ?? {})) {
+        const mode = resolveConsoleSideMode(id, entry, { hasService: true });
+        if (mode.kind !== 'crypto-auto') continue;
+        const key = mode.key ?? CONSOLE_CRYPTO_KEY;
+        if (!(await service.store.getKey(mode.partition, key))) {
+          results.push({
+            status: 'warn',
+            message: `"${mode.partition}/${key}" does not exist yet: the web process creates it at boot.`,
+            fix: `Start the web process once, or run \`node ace crypto:keys:create ${key} --type aes256-gcm --application ${mode.partition}\`.`,
+            docs,
+          });
+          continue;
+        }
+        results.push(await probe(service, mode.partition, key, `commands to "${id}"`));
+      }
+      // App side: what this app opens commands with.
+      const modes = resolveAppCommandModes(config);
+      if (modes?.crypto) {
+        const key = modes.crypto.key ?? CONSOLE_CRYPTO_KEY;
+        results.push(await openCheck(modes.crypto.cipher, key));
+      }
+      if (modes?.sealedToApp && config.consoleCommands) {
+        const partitions =
+          config.consoleCommands.partitions ?? (runtime.partition ? [runtime.partition] : []);
+        for (const partition of partitions) {
+          const record = await service.store.getKey(partition, CONSOLE_COMMAND_KEY);
+          results.push(
+            record && record.type === 'x25519' && record.deletedAt === undefined
+              ? {
+                  status: 'ok',
+                  message: `"${partition}/${CONSOLE_COMMAND_KEY}" is ready for token mode (full public key: node ace crypto:keys:public-key ${CONSOLE_COMMAND_KEY} --application ${partition}).`,
+                }
+              : {
+                  status: 'warn',
+                  message: `"${partition}/${CONSOLE_COMMAND_KEY}" does not exist yet: the web process creates it at boot.`,
+                  fix: 'Start the web process once (token-mode consoles read its public half from this store).',
+                  docs,
+                },
+          );
+        }
+      }
+      if (results.length === 0) {
+        return { status: 'skip', message: 'No console command key to check.' };
+      }
+      return results;
+    },
+  },
+  {
     id: 'crypto.subjects',
     lib: 'crypto',
     title: 'Encrypted columns without plaintext fallback',
@@ -296,3 +428,117 @@ export const agoraDoctorChecks: AgoraDoctorCheck[] = [
     },
   },
 ];
+
+/** Encrypts and decrypts a probe with `key` in `partition` of this server (audited like any call). */
+async function probe(
+  service: CryptoService,
+  partition: string,
+  key: string,
+  what: string,
+): Promise<AgoraDoctorResult> {
+  const principal = {
+    partition,
+    capabilities: [`crypto:encrypt:${key}`, `crypto:decrypt:${key}`],
+    actor: 'agora:doctor',
+  };
+  try {
+    const plaintext = randomUUID();
+    const { ciphertext } = await service.encrypt(principal, { key, plaintext });
+    const opened = await service.decrypt(principal, { key, ciphertext, context: 'doctor' });
+    if (opened.plaintext !== plaintext) throw new Error('the probe did not round-trip');
+    return { status: 'ok', message: `${what}: "${partition}/${key}" encrypts and decrypts.` };
+  } catch (error) {
+    return {
+      status: 'error',
+      message: `${what}: "${partition}/${key}" is not usable: ${(error as Error).message}.`,
+      fix: 'Check the root keyring that sealed it (`crypto.key-material`), or delete and let the boot re-create it.',
+      docs: `${DOCS}/federated-console#authenticating-the-console`,
+    };
+  }
+}
+
+/**
+ * App side, explicit crypto: whether this app's cipher can open commands with `key`. A decrypt of
+ * a well-formed but bogus ciphertext tells "no such key" and "not allowed" apart from "the key is
+ * there and this client may use it" (which fails only on the ciphertext itself).
+ */
+async function openCheck(source: ConsoleCipherSource, key: string): Promise<AgoraDoctorResult> {
+  const docs = `${DOCS}/federated-console#authenticating-the-console`;
+  try {
+    const cipher = typeof source === 'function' ? await source() : source;
+    // `hasKey` when the cipher has it (no audit row); the decrypt probe otherwise.
+    const hasKey = (cipher as { hasKey?: (input: { key: string }) => Promise<boolean> }).hasKey;
+    const exists =
+      typeof hasKey === 'function'
+        ? await hasKey.call(cipher, { key }).catch((error: unknown) => {
+            // Refused: reported below. Anything else (a server that predates it): probe.
+            if (/forbidden|lacks|capabilit/i.test((error as Error)?.message ?? '')) throw error;
+            return undefined;
+          })
+        : undefined;
+    if (exists !== undefined) {
+      if (exists) {
+        return { status: 'ok', message: `consoleCommands can open commands with "${key}".` };
+      }
+      return {
+        status: 'error',
+        message: `The crypto server has no "${key}" key in this app's partition.`,
+        fix: `Start the console (it creates it), or run \`node ace crypto:keys:create ${key} --type aes256-gcm --application <this app>\` on that server.`,
+        docs,
+      };
+    }
+    await cipher.decrypt({
+      key,
+      ciphertext: `agora:ct1:${key}:1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`,
+      aad: 'agora:doctor',
+      context: 'doctor',
+    });
+    return { status: 'ok', message: `consoleCommands opens commands with "${key}".` };
+  } catch (error) {
+    const message = (error as Error).message ?? String(error);
+    if (/no key named|not[ _]found/i.test(message)) {
+      return {
+        status: 'error',
+        message: `The crypto server has no "${key}" key in this app's partition.`,
+        fix: `Start the console (it creates it), or run \`node ace crypto:keys:create ${key} --type aes256-gcm --application <this app>\` on that server.`,
+        docs,
+      };
+    }
+    if (/forbidden|lacks|capabilit/i.test(message)) {
+      return {
+        status: 'error',
+        message: `This app's crypto client may not decrypt with "${key}".`,
+        fix: "Check that this app's crypto client is for its own partition (an app opens its own console-* keys without a grant), and that the console's crypto server is up to date.",
+        docs,
+      };
+    }
+    if (/invalid|did not open|tampered|authenticate/i.test(message)) {
+      return { status: 'ok', message: `consoleCommands can open commands with "${key}".` };
+    }
+    return {
+      status: 'error',
+      message: `consoleCommands could not reach its crypto cipher: ${message}.`,
+      fix: 'Check consoleCommands.crypto.cipher (the crypto server URL and token).',
+      docs,
+    };
+  }
+}
+
+/** The `console-commands` key of each served partition as the boot log names it (`key <8-char id>`). */
+async function commandKeyIds(config: CryptoConfig): Promise<string> {
+  const store = runtimeOf()?.store;
+  const options = config.topology === 'tenant' ? undefined : config.consoleCommands;
+  const own = config.topology === 'control-plane' ? undefined : (config as { app?: string }).app;
+  const partitions = options?.partitions ?? (own ? [own] : []);
+  const ids = await Promise.all(
+    partitions.map(async (partition) => {
+      const record = await store?.getKey(partition, CONSOLE_COMMAND_KEY).catch(() => null);
+      const version = record
+        ? await store?.version(partition, CONSOLE_COMMAND_KEY, record.latestVersion)
+        : null;
+      const kid = version?.publicKey?.kid;
+      return `key ${kid ? kid.slice(0, 8) : '(not created yet)'}`;
+    }),
+  );
+  return ids.join(', ') || 'key (not created yet)';
+}

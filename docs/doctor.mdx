@@ -20,6 +20,8 @@ command pre-filtered to this lib. Exit code `0` when nothing is an error, `1` ot
 | `crypto.key-material` | deep | Opens **every** key version with the configured root; reports a `retired` root as a warning and an unopenable version as an error. |
 | `crypto.tenant` | deep | On a tenant: is the server reachable and is the token accepted, with which capabilities? |
 | `crypto.console` | cheap | Is the console gated? Without `console.authorize` it warns outside production and errors in production, where it denies every request. |
+| `crypto.console-commands` | cheap | Federated console: which modes `consoleCommands` accepts, and how this console authenticates commands to each `federatedApps` entry. Errors when a side is unauthenticated. |
+| `crypto.console-commands-key` | deep | The console's `console-crypto` key exists in each federated app's partition and round-trips a probe; the owning app's cipher may open with its key; token mode's `console-commands` key exists. |
 
 ## What the messages mean
 

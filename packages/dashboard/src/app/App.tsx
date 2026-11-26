@@ -26,6 +26,7 @@ import {
   readBootstrap,
 } from '../client/crypto-client';
 import { AuditPage } from './AuditPage';
+import { manageDeniedReason } from './capabilities';
 import { ConsoleContext } from './console-context';
 import { KeyPage } from './KeyPage';
 import { KeysPage } from './KeysPage';
@@ -242,6 +243,7 @@ function Console() {
   const federatedApps = meta.data.federated ?? [];
   const federated = federatedApps.find((app) => app.id === partition);
   const readOnly = federated ? actionsUnavailableReason(federated.label, federated) : undefined;
+  const cannotManage = readOnly ?? manageDeniedReason(meta.data.capabilities);
   const current: ReactNode =
     route.page === 'overview' ? (
       <OverviewPage />
@@ -255,7 +257,7 @@ function Console() {
 
   return (
     <ConsoleContext.Provider
-      value={{ api, meta: meta.data, partition, setPartition, federated, readOnly }}
+      value={{ api, meta: meta.data, partition, setPartition, federated, readOnly, cannotManage }}
     >
       <AppShell
         brand={{

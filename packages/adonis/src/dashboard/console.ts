@@ -16,15 +16,12 @@ import {
   type FederatedCryptoApps,
   testKey,
 } from '../federation/console.js';
+import { cryptoConsoleAllows, viewerConsoleCapabilities } from '../federation/console_grants.js';
 import { parseAuditRequest, parseListQuery } from '../http/list.js';
 import { resolveAccessDeniedPage } from './access_denied_page.js';
 import { type ConsoleActor, consoleActor } from './actor.js';
-import {
-  type ConsoleAuthorizeDecision,
-  consoleAppAllowed,
-  consoleVisibleApps,
-  resolveConsoleAuthorize,
-} from './console_authorize.js';
+import { consoleAppAllowed, consoleVisibleApps } from './console_apps.js';
+import { type ConsoleAuthorizeDecision, resolveConsoleAuthorize } from './console_authorize.js';
 import { resolveSignOut, resolveViewer } from './console_shell.js';
 import {
   type AgoraConsoleRegistry,
@@ -84,6 +81,8 @@ export class CryptoConsole {
   readonly #grants = new WeakMap<HttpContext, '*' | string[] | undefined>();
   /** The `capabilities` of each request that passed the guard, when the authorizer said. */
   readonly #capabilities = new WeakMap<HttpContext, string[]>();
+  /** The `access` of each request that passed the guard, when the authorizer said. */
+  readonly #access = new WeakMap<HttpContext, 'read' | 'write'>();
   #warned = false;
 
   constructor(private readonly options: CryptoConsoleOptions) {
@@ -149,6 +148,7 @@ export class CryptoConsole {
       if (Array.isArray(decision.capabilities)) {
         this.#capabilities.set(ctx, decision.capabilities);
       }
+      if (decision.access !== undefined) this.#access.set(ctx, decision.access);
       return true;
     }
     if (decision.status === 302) {
@@ -205,7 +205,12 @@ export class CryptoConsole {
       return ctx.response.status(400).json({ error: error.message });
     }
     if (error instanceof CryptoError) {
-      return ctx.response.status(error.status).json({ error: error.message, code: error.code });
+      // The service speaks of tokens; here the capability comes from the viewer's console grant.
+      const message =
+        error.code === 'forbidden'
+          ? error.message.replace('the token lacks', 'the viewer lacks')
+          : error.message;
+      return ctx.response.status(error.status).json({ error: message, code: error.code });
     }
     this.options.logger.warn(
       `[@adonis-agora/crypto] console request failed: ${(error as Error).message}`,
@@ -286,22 +291,64 @@ export class CryptoConsole {
   /** What a command to another app carries: the viewer (the actor) and what it was granted. */
   async #commandMeta(ctx: HttpContext): Promise<CommandMeta> {
     const actor = await this.#actor(ctx);
-    const capabilities = this.#capabilities.get(ctx);
     return {
       actor: actor.id,
-      ...(capabilities !== undefined ? { capabilities } : {}),
+      // Always sent, narrowed to the crypto console set (the whole set when `authorize` does not
+      // narrow); the app caps it with its own `capabilities`. An app refuses a command without.
+      capabilities: this.#viewerCapabilities(ctx),
       ...(this.options.config.appLabel !== undefined ? { via: this.options.config.appLabel } : {}),
     };
   }
 
-  /** Everything the console does acts for the operator, with full rights: it is the server. */
+  /**
+   * What this viewer may do: the capabilities its `authorize` granted (`crypto:console:*` aliases
+   * expanded, `access: 'read'` applied), narrowed to the crypto console set; the whole set when it
+   * named none (an authorizer that does not narrow keeps full console rights, as before).
+   */
+  #viewerCapabilities(ctx: HttpContext): string[] {
+    return viewerConsoleCapabilities(this.#capabilities.get(ctx), this.#access.get(ctx));
+  }
+
+  /**
+   * The principal the console acts with on its own partitions: the operator, with what `authorize`
+   * granted. Reading key metadata and the audit is part of being let in (as on a federated app),
+   * so `crypto:keys:read` is always added; every other operation needs its own capability.
+   */
   async #principal(ctx: HttpContext): Promise<CryptoPrincipal> {
     const actor = await this.#actor(ctx);
+    const granted = this.#viewerCapabilities(ctx);
     return {
       partition: this.#partition(ctx),
-      capabilities: ['crypto:*'],
+      capabilities: granted.includes('crypto:keys:read')
+        ? granted
+        : [...granted, 'crypto:keys:read'],
       actor: actor.id,
     };
+  }
+
+  /**
+   * On this console's own apps, create, rotate, re-policy and delete need `crypto:keys:manage` (or
+   * its key-scoped form) in the viewer's grant: refused with a 403 that says so. A federated app
+   * gets the same grant with the command and refuses (and audits) it itself.
+   */
+  #grantedText(ctx: HttpContext): string {
+    const raw = this.#capabilities.get(ctx);
+    const text = raw === undefined ? 'the full console set' : raw.join(', ') || 'nothing';
+    return this.#access.get(ctx) === 'read' ? `${text}, access: 'read'` : text;
+  }
+
+  #requireManage(ctx: HttpContext, name: string, what: string): void {
+    const granted = this.#viewerCapabilities(ctx);
+    if (
+      cryptoConsoleAllows(granted, 'crypto:keys:manage') ||
+      cryptoConsoleAllows(granted, `crypto:keys:manage:${name}`)
+    ) {
+      return;
+    }
+    throw new HttpError(
+      403,
+      `crypto: the viewer lacks crypto:keys:manage, so it may not ${what} (console.authorize granted ${this.#grantedText(ctx)})`,
+    );
   }
 
   async #shell(ctx: HttpContext) {
@@ -396,6 +443,8 @@ export class CryptoConsole {
       defaultPartition,
       topology: this.options.topology,
       actor: actor.id,
+      // What this viewer may do (the SPA hides what it may not; the server refuses it anyway).
+      capabilities: this.#viewerCapabilities(ctx),
       ...(federated.length > 0
         ? { federated: federated.map((id) => this.options.federated!.describe(id)) }
         : {}),
@@ -476,6 +525,7 @@ export class CryptoConsole {
     }
     const type = body.type as CryptoKeyType;
     const federated = await this.#federated(ctx);
+    if (!federated) this.#requireManage(ctx, body.name, 'create keys');
     if (federated) {
       const created = await federated.createKey(
         {
@@ -509,6 +559,7 @@ export class CryptoConsole {
   async rotateKey(ctx: HttpContext) {
     const name = String((ctx.params as Record<string, string>).name ?? '');
     const federated = await this.#federated(ctx);
+    if (!federated) this.#requireManage(ctx, name, 'rotate keys');
     if (federated) {
       return ctx.response.json(await federated.rotateKey(name, await this.#commandMeta(ctx)));
     }
@@ -555,6 +606,7 @@ export class CryptoConsole {
     const body = this.#body(ctx);
     const name = String((ctx.params as Record<string, string>).name ?? '');
     const federated = await this.#federated(ctx);
+    if (!federated) this.#requireManage(ctx, name, "change a key's policy");
     if (federated) {
       const patch = Object.fromEntries(
         ['description', 'minDecryptionVersion', 'deletionAllowed', 'exportable']
@@ -585,6 +637,7 @@ export class CryptoConsole {
   async deleteKey(ctx: HttpContext) {
     const name = String((ctx.params as Record<string, string>).name ?? '');
     const federated = await this.#federated(ctx);
+    if (!federated) this.#requireManage(ctx, name, 'delete keys');
     if (federated) {
       return ctx.response.json(await federated.deleteKey(name, await this.#commandMeta(ctx)));
     }

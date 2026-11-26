@@ -231,12 +231,53 @@ export interface EncryptInput {
   aad?: string;
   /** Encrypt with a specific version instead of the latest. Default: latest. */
   version?: number;
+  /**
+   * Seal for another app: encrypt with `key` of this partition instead of the token's. Encrypt
+   * only (nothing ever decrypts across partitions), and only with an explicit `crypto:seal:<key>`
+   * grant (prefix wildcards work: `crypto:seal:console-*`; `crypto:*` does not count); audited in
+   * that partition. Omitted: the token's own.
+   */
+  partition?: string;
+}
+
+/** {@link CryptoClient.hasKey}: whether a key exists in the caller's own partition. */
+export interface HasKeyInput {
+  key: string;
+}
+
+/** The wire answer of `has-key` (the client returns `exists`). */
+export interface HasKeyResult {
+  key: string;
+  exists: boolean;
 }
 
 export interface EncryptResult {
   key: string;
   version: number;
   ciphertext: string;
+  /** The partition that sealed it, echoed when the input named one. */
+  partition?: string;
+}
+
+/** What sealing for another partition needs on a key (see {@link EncryptInput.partition}). */
+export function sealScope(key: string): string {
+  return `crypto:seal:${key}`;
+}
+
+/**
+ * Client side of {@link EncryptInput.partition}: a server that predates it ignores the field and
+ * encrypts in the caller's own partition, which nobody could open where it is going. A result
+ * that does not echo the partition is turned into this clear error instead.
+ */
+export function assertSealedFor<T extends { partition?: string | undefined }>(
+  input: { partition?: string | undefined },
+  result: T,
+): T {
+  if (input.partition === undefined || result?.partition === input.partition) return result;
+  throw new CryptoError(
+    'unsupported',
+    `crypto: the crypto server ignored \`partition: "${input.partition}"\` (it predates sealing for another partition): upgrade @adonis-agora/crypto on the crypto server, or configure \`crypto\` explicitly`,
+  );
 }
 
 export interface DecryptInput {

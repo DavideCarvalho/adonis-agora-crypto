@@ -29,7 +29,16 @@ interface RouterLike {
   route?(pattern: string, methods: string[], handler: (ctx: HttpContext) => unknown): unknown;
 }
 
-const OPERATIONS = ['encrypt', 'decrypt', 'rewrap', 'datakeys', 'sign', 'verify', 'hmac'] as const;
+const OPERATIONS = [
+  'encrypt',
+  'decrypt',
+  'rewrap',
+  'datakeys',
+  'sign',
+  'verify',
+  'hmac',
+  'has-key',
+] as const;
 const BATCHES = ['encrypt', 'decrypt', 'sign', 'verify'] as const;
 
 export interface CryptoApiOptions {
@@ -237,6 +246,8 @@ export class CryptoApi {
           return ctx.response.json(await service.encrypt(principal, body as never));
         case 'decrypt':
           return ctx.response.json(await service.decrypt(principal, body as never));
+        case 'has-key':
+          return ctx.response.json(await service.hasKey(principal, body as never));
         case 'rewrap':
           return ctx.response.json(await service.rewrap(principal, body as never));
         case 'datakeys':

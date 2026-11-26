@@ -8,6 +8,7 @@ import { openMaterial } from '../../src/crypto/material.js';
 import { CryptoService } from '../../src/crypto/service.js';
 import { defineConfig, stores } from '../../src/define_config.js';
 import { agoraDoctorChecks } from '../../src/doctor/checks.js';
+import { ensureConsoleCryptoKey } from '../../src/federation/console_modes.js';
 import { getRuntime } from '../../src/services/accessor.js';
 import { MemoryStore } from '../../src/store/memory_store.js';
 
@@ -113,6 +114,103 @@ describe('doctor checks', () => {
       true,
     );
     expect((await check('crypto.console').run(gated)).status).toBe('ok');
+  });
+
+  it('reports how console commands are authenticated, and errors when a side is not', async () => {
+    const none = stubApp(
+      defineConfig({ app: 'shop', store: stores.memory(), consoleCommands: { prefix: 'shop' } }),
+    );
+    const [unauthenticated] = (await check('crypto.console-commands').run(none)) as Array<{
+      status: string;
+      fix?: string;
+    }>;
+    expect(unauthenticated).toMatchObject({ status: 'error' });
+    expect(unauthenticated!.fix).toMatch(
+      /consoleCommands\.crypto.*consoleCommands\.secret.*consoleCommands\.verifyTenant.*node ace agora:doctor/s,
+    );
+
+    const withSecret = stubApp(
+      defineConfig({
+        app: 'shop',
+        store: stores.memory(),
+        consoleCommands: { prefix: 'shop', secret: 'x'.repeat(20) },
+        console: {
+          federatedApps: {
+            auto: { store: new MemoryStore(), controlPlane: { prefix: 'auto' } },
+            off: { store: new MemoryStore(), controlPlane: { prefix: 'off', crypto: false } },
+          },
+        },
+      }),
+    );
+    const results = (await check('crypto.console-commands').run(withSecret)) as Array<{
+      status: string;
+      message: string;
+    }>;
+    expect(results.map((r) => r.status)).toEqual(['ok', 'ok', 'error']);
+    expect(results[0]!.message).toMatch(/secret/);
+    expect(results[1]!.message).toMatch(/crypto \(auto, key console-crypto/);
+  });
+
+  it("deep: the console's console-crypto key exists and round-trips", async () => {
+    const hub = stubApp(
+      defineConfig({
+        app: 'hub',
+        store: stores.memory(),
+        console: {
+          federatedApps: { shop: { store: new MemoryStore(), controlPlane: { prefix: 'shop' } } },
+        },
+      }),
+    );
+    const [missing] = (await check('crypto.console-commands-key').run(hub)) as Array<{
+      status: string;
+    }>;
+    expect(missing).toMatchObject({ status: 'warn' });
+    await ensureConsoleCryptoKey(getRuntime().service!, 'shop');
+    const [ready] = (await check('crypto.console-commands-key').run(hub)) as Array<{
+      status: string;
+      message: string;
+    }>;
+    expect(ready).toMatchObject({ status: 'ok' });
+    expect(ready!.message).toMatch(/encrypts and decrypts/);
+  });
+
+  it('deep: checks the app-side key with hasKey (no audit noise), never the decrypt probe', async () => {
+    let probed = 0;
+    const cipher = {
+      encrypt: async () => ({ ciphertext: '' }),
+      decrypt: async () => {
+        probed += 1;
+        throw new Error('crypto: no key named "console-crypto"');
+      },
+      hasKey: async ({ key }: { key: string }) => key === 'console-crypto',
+    };
+    const app = stubApp(
+      defineConfig({
+        app: 'shop',
+        store: stores.memory(),
+        console: false,
+        consoleCommands: { prefix: 'shop', crypto: { cipher } },
+      }),
+    );
+    const results = (await check('crypto.console-commands-key').run(app)) as Array<{
+      status: string;
+      message: string;
+    }>;
+    expect(results[0]).toMatchObject({ status: 'ok' });
+    expect(probed).toBe(0);
+    const missing = stubApp(
+      defineConfig({
+        app: 'shop',
+        store: stores.memory(),
+        console: false,
+        consoleCommands: { prefix: 'shop', crypto: { cipher, key: 'console-other' } },
+      }),
+    );
+    const [absent] = (await check('crypto.console-commands-key').run(missing)) as Array<{
+      status: string;
+    }>;
+    expect(absent).toMatchObject({ status: 'error' });
+    expect(probed).toBe(0);
   });
 
   it('skips instead of throwing when the app is not booted (--no-boot)', async () => {

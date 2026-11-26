@@ -1,4 +1,5 @@
 import {
+  assertSealedFor,
   type BatchResult,
   type CreateKeyInput,
   type CryptoAuditRecord,
@@ -13,6 +14,8 @@ import {
   type EncryptInput,
   type EncryptResult,
   type ExportKeyResult,
+  type HasKeyInput,
+  type HasKeyResult,
   type HmacInput,
   type HmacResult,
   type KeyPolicyInput,
@@ -250,8 +253,8 @@ export class CryptoClient {
   /* Operations                                                                                  */
   /* ------------------------------------------------------------------------------------------ */
 
-  encrypt(input: EncryptInput): Promise<EncryptResult> {
-    return this.#request('POST', '/v1/encrypt', input);
+  async encrypt(input: EncryptInput): Promise<EncryptResult> {
+    return assertSealedFor(input, await this.#request<EncryptResult>('POST', '/v1/encrypt', input));
   }
 
   decrypt(input: DecryptInput): Promise<DecryptResult> {
@@ -345,6 +348,17 @@ export class CryptoClient {
       'GET',
       `/v1/keys/${encodeURIComponent(name)}/export${this.#query({ version })}`,
     );
+  }
+
+  /**
+   * Whether `key` exists (and is not deleted) in this client's own partition. Same authorization
+   * as `decrypt` on it (an app's own `console-*` keys need no grant); a missing key is `false`, and
+   * nothing is written to the audit trail. A server that predates it answers an error: fall back
+   * to a decrypt probe.
+   */
+  async hasKey(input: HasKeyInput): Promise<boolean> {
+    const result = await this.#request<HasKeyResult>('POST', '/v1/has-key', input);
+    return result?.exists === true;
   }
 
   publicKey(name: string): Promise<PublicKeyResult> {
