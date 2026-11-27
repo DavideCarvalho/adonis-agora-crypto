@@ -1,5 +1,13 @@
 # @adonis-agora/crypto
 
+## 1.1.1
+
+### Patch Changes
+
+- [#47](https://github.com/DavideCarvalho/adonis-agora-crypto/pull/47) [`73c437e`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/73c437ea90a821db7187707de5f7f9937a0bb807) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `node ace add @adonis-agora/crypto` (and `node ace configure @adonis-agora/crypto`) now runs the configure hook: the main entry exports `configure`, which Adonis looks for there. Before, it only warned "the module does not export the configure hook" and published nothing.
+  
+  The published `create_crypto_tables` migration now uses `createTableIfNotExists`. `node ace migration:run` boots the provider, which creates the tables first (`autoCreateSchema` is on by default), so a fresh install failed with "table `crypto_keys` already exists".
+
 ## 1.1.0
 
 ### Minor Changes

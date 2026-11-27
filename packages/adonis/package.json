@@ -1,6 +1,6 @@
 {
   "name": "@adonis-agora/crypto",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "A crypto server and in-process service for AdonisJS: named, versioned keys per app, encrypt/decrypt/rewrap/sign/hmac, data keys, audited over HTTP or in process — a small HashiCorp Vault Transit. Part of the Agora ecosystem.",
   "license": "MIT",
   "repository": {
