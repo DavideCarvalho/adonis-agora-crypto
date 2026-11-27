@@ -19,7 +19,7 @@ the apps it knows, and every route keeps receiving plaintext.
 ```ts title="config/crypto.ts"
 export default defineConfig({
   topology: 'tenant', // or 'control-plane' on the hub
-  tenant: { url: env.get('CRYPTO_URL'), partition: 'billing', token },
+  // tenant url/token/partition: from authkit-client's `service`, or `tenant: { url, partition, token }`
   envelope: { key: 'svc-hub' }, // the shared aes256-gcm key both sides hold
 })
 ```

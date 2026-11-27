@@ -52,7 +52,7 @@ It serves, under `/_crypto`:
 ## A tenant
 
 With `@adonis-agora/authkit-client` configured in the app (`service: { name, clientId,
-clientSecret }` and its issuer in `config/authkit.ts`), one line is enough:
+clientSecret }` and its issuer in `config/authkit_client.ts`), one line is enough:
 
 ```ts title="config/crypto.ts (an app)"
 import { defineConfig } from '@adonis-agora/crypto'
@@ -114,8 +114,9 @@ import crypto from '@adonis-agora/crypto/services/main'
 const { ciphertext } = await crypto.encrypt({ key: 'media', plaintext: url })
 ```
 
-`url` can also be a function, resolved before the first call. With authkit, let the issuer tell
-the tenant where the server is:
+`url` can also be a function, resolved before the first call. The zero-config form already
+discovers it this way; when you pass the other fields yourself, the issuer can still tell the
+tenant where the server is:
 
 ```ts
 import { controlPlaneUrl } from '@adonis-agora/authkit-client'
@@ -141,7 +142,8 @@ Create the key names on the server, then change only `config/crypto.ts`:
 
 ```ts
 export default defineConfig({ topology: 'standalone', app: 'streaming' })  // before
-export default defineConfig({ topology: 'tenant', tenant: { … } })         // after
+export default defineConfig({ topology: 'tenant' })                       // after (authkit-client's `service`)
+export default defineConfig({ topology: 'tenant', tenant: { … } })         // after, explicit
 ```
 
 Calls do not change. Ciphertext made locally with `standalone` stays readable only by the local key,

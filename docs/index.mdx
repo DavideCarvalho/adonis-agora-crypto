@@ -14,6 +14,29 @@ node ace add @adonis-agora/crypto
 ```
 
 ```ts title="config/crypto.ts (the server)"
+import { authkitTenantVerifier } from '@adonis-agora/authkit-client'
+import { defineConfig } from '@adonis-agora/crypto'
+
+export default defineConfig({
+  topology: 'control-plane',
+  // The token's partition is the app; its capabilities say what it may do.
+  verifyTenant: authkitTenantVerifier({ issuer: env.get('AUTHKIT_ISSUER'), resource: 'urn:agora:crypto' }),
+})
+```
+
+With `@adonis-agora/authkit-client` configured in the app (its `service`), one line is enough: the
+server URL, the token and the partition come from authkit-client for `urn:agora:crypto`.
+
+```ts title="config/crypto.ts (an app)"
+import { defineConfig } from '@adonis-agora/crypto'
+
+export default defineConfig({ topology: 'tenant' })
+```
+
+Without authkit-client, pass them yourself, e.g. with a shared secret per app (any field you set
+also wins over the discovered one; see [Deployment](/docs/crypto/deployment#a-tenant)):
+
+```ts title="config/crypto.ts (the server, shared secret)"
 import { defineConfig, sharedSecretVerifier } from '@adonis-agora/crypto'
 
 export default defineConfig({
@@ -30,7 +53,7 @@ export default defineConfig({
 })
 ```
 
-```ts title="config/crypto.ts (an app)"
+```ts title="config/crypto.ts (an app, explicit)"
 import { defineConfig } from '@adonis-agora/crypto'
 
 export default defineConfig({
