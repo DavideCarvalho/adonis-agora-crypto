@@ -71,6 +71,9 @@
     "README.md",
     "CHANGELOG.md"
   ],
+  "publishConfig": {
+    "tag": "v0"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "prepack": "pnpm run build",
