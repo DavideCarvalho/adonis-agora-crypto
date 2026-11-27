@@ -1,5 +1,11 @@
 # @adonis-agora/crypto
 
+## 1.1.2
+
+### Patch Changes
+
+- [#49](https://github.com/DavideCarvalho/adonis-agora-crypto/pull/49) [`7c7bddf`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/7c7bddf4b734eaa7685669cbcea32b378f50233d) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Fix `import '@adonis-agora/crypto'` failing in 1.1.1 with `Cannot find module …/dist/stubs/main.js` under plain Node (a compiled app; apps running through a TypeScript loader resolved it to the `.ts` source and did not notice). The build now compiles `stubs/main.ts` and no longer deletes it when copying the stubs, and `check:package` imports the built main entry with plain Node.
+
 ## 1.1.1
 
 ### Patch Changes
