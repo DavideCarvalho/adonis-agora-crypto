@@ -1,10 +1,11 @@
-import type { CryptoClient } from '@adonis-agora/crypto-core';
+import type { CryptoClient, ServerUrlSource, TenantTokenSource } from '@adonis-agora/crypto-core';
 import type { CryptoService } from './crypto/service.js';
 import type { CryptoApi } from './http/api.js';
 import type { ResolvedInboundEnvelope } from './http/envelope_global.js';
 import type { CryptoOperations } from './operations.js';
 import type { CryptoStore } from './store/store.js';
 import type { SubjectKeys } from './subjects/subject_keys.js';
+import type { ResolvedTenantFields } from './topology/tenant_auto.js';
 import type { TenantVerifier } from './topology/verify.js';
 
 /** What a tenant loaded: who it is and what its token may do. */
@@ -31,6 +32,17 @@ export interface CryptoRuntime {
   api?: CryptoApi;
   /** Tenant only. */
   client?: CryptoClient;
+  /**
+   * Tenant only: the url, token and partition in use, and where each came from (`config/crypto.ts`
+   * or authkit-client's discovery).
+   */
+  tenant?: {
+    url?: ServerUrlSource;
+    token?: TenantTokenSource;
+    partition: string;
+    sources: ResolvedTenantFields['sources'];
+    missing: ResolvedTenantFields['missing'];
+  };
   /** The same calls everywhere: in-process on a server, over HTTP or a broker on a tenant. */
   operations: CryptoOperations;
   /** Set when the control plane consumes a broker: shuts its consumer down. */

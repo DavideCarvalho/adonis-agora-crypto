@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { createCryptoClient } from '@adonis-agora/crypto-core';
+import { CRYPTO_RESOURCE, createCryptoClient } from '@adonis-agora/crypto-core';
 import type { ApplicationService } from '@adonisjs/core/types';
 import { openMaterial } from '../crypto/material.js';
 import { materialStatus } from '../crypto/reseal.js';
@@ -18,6 +18,12 @@ import { CONSOLE_CRYPTO_KEY, type ConsoleCipherSource } from '../federation/redi
 import type { CryptoRuntime } from '../runtime.js';
 import { getRuntime, hasRuntime } from '../services/accessor.js';
 import { legacyPlaintextColumns, legacyPlaintextReads } from '../subjects/lucid.js';
+import {
+  describeTenantSources,
+  type ResolvedTenantFields,
+  resolveTenantFields,
+  tenantMissingMessage,
+} from '../topology/tenant_auto.js';
 import type { AgoraDoctorCheck, AgoraDoctorResult } from './agora_doctor.js';
 
 const DOCS = 'https://davidecarvalho.github.io/agora/docs/crypto';
@@ -38,6 +44,28 @@ function tenantConfig(app: ApplicationService): TenantTopologyConfig | null {
 
 function runtimeOf(): CryptoRuntime | null {
   return hasRuntime() ? getRuntime() : null;
+}
+
+/**
+ * The tenant's url, token and partition: the booted runtime's when it is this tenant's, else
+ * resolved again from `config/crypto.ts` and authkit-client.
+ */
+async function tenantFieldsOf(
+  app: ApplicationService,
+  config: TenantTopologyConfig,
+): Promise<ResolvedTenantFields> {
+  const runtime = runtimeOf();
+  if (runtime?.topology === 'tenant' && runtime.tenant) {
+    const { url, token, partition, sources, missing } = runtime.tenant;
+    return {
+      ...(url !== undefined ? { url } : {}),
+      ...(token !== undefined ? { token } : {}),
+      ...(partition ? { partition } : {}),
+      sources,
+      missing,
+    };
+  }
+  return resolveTenantFields(app.container, config.tenant, CRYPTO_RESOURCE);
 }
 
 /** `--no-boot` (or a boot that failed): the config is not loaded, so the check has nothing to read. */
@@ -192,6 +220,31 @@ export const agoraDoctorChecks: AgoraDoctorCheck[] = [
     },
   },
   {
+    id: 'crypto.tenant-config',
+    lib: 'crypto',
+    title: 'Tenant url, token and partition',
+    run: async (app): Promise<AgoraDoctorResult> => {
+      if (configOf(app) === null) return notBooted();
+      const config = tenantConfig(app);
+      if (!config) {
+        return {
+          status: 'skip',
+          message: 'This process is not a tenant: it serves keys instead of asking for them.',
+        };
+      }
+      const fields = await tenantFieldsOf(app, config);
+      if (fields.missing.length > 0) {
+        return {
+          status: 'error',
+          message: `${describeTenantSources(fields.sources)}.`,
+          fix: tenantMissingMessage(fields),
+          docs: `${DOCS}/deployment`,
+        };
+      }
+      return { status: 'ok', message: `${describeTenantSources(fields.sources)}.` };
+    },
+  },
+  {
     id: 'crypto.tenant',
     lib: 'crypto',
     title: 'Crypto server reachable and token accepted',
@@ -205,10 +258,17 @@ export const agoraDoctorChecks: AgoraDoctorCheck[] = [
           message: 'This process is not a tenant: it serves keys instead of asking for them.',
         };
       }
+      const fields = await tenantFieldsOf(app, config);
+      if (!fields.url || !fields.token || !fields.partition) {
+        return {
+          status: 'skip',
+          message: `${describeTenantSources(fields.sources)}: nothing to call (see crypto.tenant-config).`,
+        };
+      }
       const client = createCryptoClient({
-        url: config.tenant.url,
-        partition: config.tenant.partition,
-        token: config.tenant.token,
+        url: fields.url,
+        partition: fields.partition,
+        token: fields.token,
         retries: 0,
       });
       let url: string;

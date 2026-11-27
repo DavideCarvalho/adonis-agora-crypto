@@ -51,6 +51,43 @@ It serves, under `/_crypto`:
 
 ## A tenant
 
+With `@adonis-agora/authkit-client` configured in the app (`service: { name, clientId,
+clientSecret }` and its issuer in `config/authkit.ts`), one line is enough:
+
+```ts title="config/crypto.ts (an app)"
+import { defineConfig } from '@adonis-agora/crypto'
+
+export default defineConfig({ topology: 'tenant' })
+```
+
+The `'authkit.client'` binding's `tenantOf('urn:agora:crypto')` supplies the three fields: `url`
+(the server, discovered from the issuer and looked up again when it stops answering), `token` (a
+client-credentials token for `urn:agora:crypto`, cached and dropped after a `401`) and `partition`
+(`service.partition`, else `service.name`). Crypto never imports authkit-client; it only looks for
+the binding, and an older authkit-client without `tenantOf` counts as absent.
+
+Anything you set yourself wins, field by field. Keep the discovered server and token but name the
+partition:
+
+```ts
+export default defineConfig({ topology: 'tenant', tenant: { partition: 'streaming' } })
+```
+
+`tenant: { auto: false }` turns the discovery off. With neither the binding nor the fields, a web
+process refuses to boot and names what is missing:
+
+```
+[@adonis-agora/crypto] topology 'tenant' needs tenant.url, tenant.token, tenant.partition. Configure @adonis-agora/authkit-client's `service` (config/authkit.ts: service: { name, clientId, clientSecret }) so they are discovered from the issuer, or pass tenant: { url, token, partition } in config/crypto.ts.
+```
+
+(`node ace` commands, the REPL and tests still boot, warn, and fail on the first crypto call.)
+`node ace agora:doctor` shows where each field came from (`crypto.tenant-config`):
+`tenant url: authkit-client (auto), token: authkit-client (auto), partition: explicit`.
+
+### Explicit (bring your own)
+
+Any IdP, a shared secret, or authkit without authkit-client's `service`: pass all three.
+
 ```ts title="config/crypto.ts (an app)"
 import { authkitTenantToken } from '@adonis-agora/authkit-client'
 import { defineConfig } from '@adonis-agora/crypto'

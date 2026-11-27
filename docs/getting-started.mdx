@@ -177,7 +177,16 @@ export default defineConfig({
 })
 ```
 
+With `@adonis-agora/authkit-client` configured in the app (its `service`), that is one line: the
+server URL, the token and the partition are discovered from the issuer for `urn:agora:crypto`.
+
 ```ts title="config/crypto.ts (app)"
+export default defineConfig({ topology: 'tenant' })
+```
+
+Without it (or to override a field), pass them yourself; see [Deployment](./deployment#a-tenant):
+
+```ts title="config/crypto.ts (app, explicit)"
 export default defineConfig({
   topology: 'tenant',
   tenant: {

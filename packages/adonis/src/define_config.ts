@@ -297,21 +297,32 @@ export interface CryptoConsoleCommandsConfig {
 /** An app that asks a central crypto server for every operation. */
 export interface TenantTopologyConfig extends BaseConfig {
   topology: 'tenant';
-  tenant: {
+  /**
+   * Where the crypto server is and how this app authenticates. With `@adonis-agora/authkit-client`
+   * booted in this app (its `service`), leave it out: the URL, the token and the partition are
+   * discovered from the issuer for `urn:agora:crypto` (`tenantOf`). Any field set here wins over
+   * the discovered one, field by field.
+   */
+  tenant?: {
+    /**
+     * `false` turns the authkit-client discovery off: every missing field is then a boot error.
+     * Default `true`.
+     */
+    auto?: boolean;
     /**
      * The server's base URL, including its prefix (`https://crypto.example.com/_crypto`), or a
      * function that resolves it before the first call — `controlPlaneUrl({ issuer, resource:
      * 'urn:agora:crypto' })` from `@adonis-agora/authkit-client`. A function is looked up again
      * (its `refresh()` when it has one) after a connection error or a 404.
      */
-    url: ServerUrlSource;
-    /** This app's name on the server (the partition). */
-    partition: string;
+    url?: ServerUrlSource;
+    /** This app's name on the server (the partition). Discovered: authkit-client's `service.partition`, else `service.name`. */
+    partition?: string;
     /**
      * The bearer token: a fixed shared secret, a function, or an object with `get()`. With authkit:
      * `authkitTenantToken({ issuer, clientId, clientSecret, resource: 'urn:agora:crypto' })`.
      */
-    token: TenantTokenSource;
+    token?: TenantTokenSource;
     /** Per request. Default `10000`. */
     timeoutMs?: number;
     /** Retries after a network error, a 429 or a 5xx. Default `2`. */
@@ -341,14 +352,10 @@ export type CryptoConfig = StandaloneConfig | ControlPlaneConfig | TenantTopolog
 export function defineConfig(config: CryptoConfig): CryptoConfig {
   const raw = config as CryptoConfig & { verifyTenant?: unknown };
   if (config.topology === 'tenant') {
-    if (!config.tenant.url) throw new Error('crypto: tenant.url is required');
-    if (!config.tenant.partition) throw new Error('crypto: tenant.partition is required');
-    if (!config.tenant.token) {
-      throw new Error(
-        "crypto: tenant.token is required (authkitTenantToken({ issuer, clientId, clientSecret, resource: 'urn:agora:crypto' }) or the shared secret)",
-      );
-    }
-    if (typeof config.tenant.url !== 'function' && !/^https?:\/\//.test(config.tenant.url)) {
+    // url, token and partition may be left out: authkit-client discovers them at boot, and the
+    // provider names whatever is still missing then.
+    const url = config.tenant?.url;
+    if (url !== undefined && typeof url !== 'function' && !/^https?:\/\//.test(url)) {
       throw new Error('crypto: tenant.url must be an absolute http(s) URL or a function');
     }
     if (raw.verifyTenant !== undefined) {

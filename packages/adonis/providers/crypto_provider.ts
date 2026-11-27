@@ -1,5 +1,9 @@
 import { fileURLToPath } from 'node:url';
-import { createCryptoClient, type EnvelopeCipher } from '@adonis-agora/crypto-core';
+import {
+  CRYPTO_RESOURCE,
+  createCryptoClient,
+  type EnvelopeCipher,
+} from '@adonis-agora/crypto-core';
 import type { HttpContext } from '@adonisjs/core/http';
 import type { ApplicationService } from '@adonisjs/core/types';
 import { createCryptoKeyring, type EncrypterLike, type Keyring } from '../src/crypto/keyring.js';
@@ -63,6 +67,7 @@ import { setRuntime } from '../src/services/accessor.js';
 import { inSchema, type SqlDatabase } from '../src/sql.js';
 import type { CryptoStore } from '../src/store/store.js';
 import { SubjectKeys } from '../src/subjects/subject_keys.js';
+import { resolveTenantFields, tenantMissingMessage } from '../src/topology/tenant_auto.js';
 import { resolveTenantVerifier } from '../src/topology/verify.js';
 import { asCryptoTransport, serveBroker } from '../src/transports/broker.js';
 import { createCryptoRpc } from '../src/transports/rpc.js';
@@ -134,44 +139,64 @@ export default class CryptoProvider {
     config: TenantTopologyConfig,
     logger: { info(message: string): void; warn(message: string): void },
   ): Promise<CryptoRuntime> {
+    const tenant = config.tenant ?? {};
+    // url, token and partition: `config/crypto.ts` first, then authkit-client's discovery.
+    const fields = await resolveTenantFields(this.app.container, tenant, CRYPTO_RESOURCE);
+    let missingMessage: string | undefined;
+    if (fields.missing.length > 0) {
+      missingMessage = tenantMissingMessage(fields);
+      // A web process refuses to boot; ace, the REPL and tests boot and fail on the first call.
+      if (this.app.getEnvironment() === 'web') throw new Error(missingMessage);
+      logger.warn(missingMessage);
+    }
+    const unavailable = async (): Promise<string> => {
+      throw new Error(missingMessage);
+    };
+    const url = fields.url ?? unavailable;
+    const token = fields.token ?? unavailable;
+    const partition = fields.partition ?? '';
     const client = createCryptoClient({
-      url: config.tenant.url,
-      partition: config.tenant.partition,
-      token: config.tenant.token,
-      ...(config.tenant.timeoutMs !== undefined ? { timeoutMs: config.tenant.timeoutMs } : {}),
-      ...(config.tenant.retries !== undefined ? { retries: config.tenant.retries } : {}),
+      url,
+      // Never sent without a partition: the url and token above throw first.
+      partition: partition || 'unconfigured',
+      token,
+      ...(tenant.timeoutMs !== undefined ? { timeoutMs: tenant.timeoutMs } : {}),
+      ...(tenant.retries !== undefined ? { retries: tenant.retries } : {}),
     });
-    const transport = config.tenant.transport
-      ? asCryptoTransport(config.tenant.transport)
-      : undefined;
-    const operations = transport
-      ? transportOperations(transport, config.tenant.token)
-      : remoteOperations(client);
+    const transport = tenant.transport ? asCryptoTransport(tenant.transport) : undefined;
+    const operations = transport ? transportOperations(transport, token) : remoteOperations(client);
     let lastCheckAt: string | undefined;
     let lastError: string | undefined;
-    if (config.tenant.checkOnBoot !== false) {
+    if (tenant.checkOnBoot !== false && !missingMessage) {
       try {
         await (transport ? operations.whoami() : client.whoami());
         lastCheckAt = new Date().toISOString();
         logger.info(
-          `[@adonis-agora/crypto] tenant ${config.tenant.partition} on ${transport ? `${transport.name} transport` : client.url}`,
+          `[@adonis-agora/crypto] tenant ${partition} on ${transport ? `${transport.name} transport` : client.url}`,
         );
       } catch (error) {
         lastError = (error as Error).message;
         logger.warn(
-          `[@adonis-agora/crypto] ${config.tenant.partition} could not reach ${client.url || 'the crypto server'}: ${lastError}`,
+          `[@adonis-agora/crypto] ${partition} could not reach ${client.url || 'the crypto server'}: ${lastError}`,
         );
       }
     }
     const runtime: CryptoRuntime = {
       topology: 'tenant',
-      partition: config.tenant.partition,
+      partition,
       client,
+      tenant: {
+        ...(fields.url !== undefined ? { url: fields.url } : {}),
+        ...(fields.token !== undefined ? { token: fields.token } : {}),
+        partition,
+        sources: fields.sources,
+        missing: fields.missing,
+      },
       operations,
       operationsFor: () => operations,
       status: () => ({
         topology: 'tenant',
-        partition: config.tenant.partition,
+        partition,
         mode: 'remote',
         ...(lastCheckAt !== undefined ? { lastCheckAt } : {}),
         ...(lastError !== undefined ? { lastError } : {}),
@@ -546,7 +571,7 @@ export default class CryptoProvider {
     const { installCryptoEnvelope } = await import('../src/http/envelope_global.js');
     // A lazy tenant URL is resolved here, so calls to the crypto server itself are never sealed.
     let tenantUrl: string | undefined;
-    if (config.topology === 'tenant' && typeof config.tenant.url === 'function') {
+    if (config.topology === 'tenant' && typeof runtime.tenant?.url === 'function') {
       tenantUrl = await runtime.client?.resolveUrl().catch((error: Error) => {
         logger.warn(
           `[@adonis-agora/crypto] envelope: the crypto server URL did not resolve (${error.message}); only the default /_crypto path is left unsealed`,
@@ -558,7 +583,10 @@ export default class CryptoProvider {
       config: envelope,
       outboundCipher: cipher,
       inboundCipher: cipher,
-      skipPaths: envelopeSkipPaths(config, tenantUrl),
+      skipPaths: envelopeSkipPaths(
+        config,
+        tenantUrl ?? (typeof runtime.tenant?.url === 'string' ? runtime.tenant.url : undefined),
+      ),
       warn: (message) => logger.warn(message),
     });
     if (!installed.inbound) return;
@@ -584,7 +612,7 @@ export default class CryptoProvider {
   /** The cipher each half uses: the app's own client on a tenant, the service in process on a server. */
   #envelopeCipher(config: CryptoConfig, runtime: CryptoRuntime): EnvelopeCipher {
     if (runtime.client) {
-      const partition = config.topology === 'tenant' ? config.tenant.partition : undefined;
+      const partition = config.topology === 'tenant' ? runtime.partition : undefined;
       if (config.envelope?.partition !== undefined && config.envelope.partition !== partition) {
         throw new Error(
           `crypto: envelope.partition cannot differ from tenant.partition ("${config.envelope.partition}" ≠ "${partition}") — a tenant's keys are the token's partition`,
