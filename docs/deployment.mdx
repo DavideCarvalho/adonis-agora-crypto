@@ -72,6 +72,9 @@ import { defineConfig } from '@adonis-agora/crypto'
 export default defineConfig({ topology: 'tenant' })
 ```
 
+`node ace configure @adonis-agora/crypto --topology=tenant` writes this file, with the explicit form
+as a comment.
+
 The `'authkit.client'` binding's `tenantOf('urn:agora:crypto')` supplies the three fields: `url`
 (the server, discovered from the issuer and looked up again when it stops answering), `token` (a
 client-credentials token for `urn:agora:crypto`, cached and dropped after a `401`) and `partition`
@@ -89,7 +92,7 @@ export default defineConfig({ topology: 'tenant', tenant: { partition: 'streamin
 process refuses to boot and names what is missing:
 
 ```
-[@adonis-agora/crypto] topology 'tenant' needs tenant.url, tenant.token, tenant.partition. Configure @adonis-agora/authkit-client's `service` (config/authkit.ts: service: { name, clientId, clientSecret }) so they are discovered from the issuer, or pass tenant: { url, token, partition } in config/crypto.ts.
+[@adonis-agora/crypto] topology 'tenant' needs tenant.url, tenant.token, tenant.partition. Configure @adonis-agora/authkit-client's `service` (config/authkit_client.ts: service: { name, clientId, clientSecret }) so they are discovered from the issuer, or pass tenant: { url, token, partition } in config/crypto.ts.
 ```
 
 (`node ace` commands, the REPL and tests still boot, warn, and fail on the first crypto call.)
