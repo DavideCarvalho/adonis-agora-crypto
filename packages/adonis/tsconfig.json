@@ -13,7 +13,8 @@
     "providers/**/*.ts",
     "services/**/*.ts",
     "commands/**/*.ts",
-    "configure.ts"
+    "configure.ts",
+    "stubs/main.ts"
   ],
   "exclude": ["test/**", "dist/**", "src/crypto-kit/*.cases.ts"]
 }
