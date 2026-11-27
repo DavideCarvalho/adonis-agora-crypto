@@ -1,6 +1,6 @@
 {
   "name": "@adonis-agora/crypto-integrations",
-  "version": "1.0.0-rc.0",
+  "version": "1.0.0",
   "description": "Seams between @adonis-agora/crypto and the other Agora libs — KMS roots for authkit, agent and config, encrypted durable transport/control-plane, encryption at rest for collaboration documents, envelope fetch for flags and any service-to-service call. Kept at 0.x so the rc libs stay untouched.",
   "license": "MIT",
   "repository": {
@@ -83,8 +83,8 @@
     "@adonis-agora/crypto-core": "workspace:^"
   },
   "peerDependencies": {
-    "@adonis-agora/collaboration": ">=1.0.0-rc.5 <2.0.0",
-    "@adonis-agora/durable": ">=1.0.0-rc.0 <2.0.0"
+    "@adonis-agora/collaboration": "^1.0.0",
+    "@adonis-agora/durable": "^1.0.0"
   },
   "peerDependenciesMeta": {
     "@adonis-agora/collaboration": {

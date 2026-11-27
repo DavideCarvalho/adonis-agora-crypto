@@ -1,6 +1,6 @@
 {
   "name": "@adonis-agora/crypto-dashboard",
-  "version": "1.0.0-rc.2",
+  "version": "1.0.0",
   "private": false,
   "description": "Console for @adonis-agora/crypto — keys, versions, policy and the audit trail, metadata only. A React SPA served by the crypto server. Part of the Agora ecosystem.",
   "license": "MIT",

@@ -452,9 +452,8 @@ narrow them) and an app refuses a command without them, and the console's own ap
   it read-only from there too.
 - **Commands are authenticated.** See above: an app with no mode does not boot.
 - **Down app, readable data.** When no instance of the app listens, an operation answers `503` at
-  once; reading keeps working. When one listens but does not answer: `no instance of "<app>"
-  answered within 15s — the app may have refused the command (check its logs, or run \`node ace
-  agora:doctor\` there)`.
+  once; reading keeps working. When one listens but does not answer:
+  `` no instance of "<app>" answered within 15s — the app may have refused the command (check its logs, or run `node ace agora:doctor` there) ``.
 - **A bad message never crashes the app.** A refused command is dropped and logged once per
   reason, as `[@adonis-agora/crypto] console commands: refused a command (<reason>)`: `not JSON`,
   `no command id`, `did not open with this app's key`, `bad signature`, `stale`, `replayed` (only

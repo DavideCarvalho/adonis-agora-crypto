@@ -1,5 +1,17 @@
 # @adonis-agora/crypto-integrations
 
+## 1.0.0
+
+### Major Changes
+
+- [#40](https://github.com/DavideCarvalho/adonis-agora-crypto/pull/40) [`c72dc96`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/c72dc968e997b91eddb9c3b00f014bb8fc6b4ccd) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - 1.0 release candidate: crypto joins the rest of the Agora libraries on the 1.x line. One breaking change: the deprecated `ctx.cryptoEnvelope` alias is gone; read the opened envelope from `ctx.agora.envelope`.
+
+### Patch Changes
+
+- Updated dependencies [[`ede8939`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/ede8939d298d3a611dc172bb2e0c8b58b971f45f), [`c88b503`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/c88b503985d874a571c52ba5ee10b05ea32c50a7), [`0107d43`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/0107d43c1f3d1ad1259dc39db22a104324e914de), [`c72dc96`](https://github.com/DavideCarvalho/adonis-agora-crypto/commit/c72dc968e997b91eddb9c3b00f014bb8fc6b4ccd)]:
+  - @adonis-agora/crypto@1.0.0
+  - @adonis-agora/crypto-core@1.0.0
+
 ## 1.0.0-rc.0
 
 ### Major Changes
