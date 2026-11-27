@@ -62,6 +62,7 @@ export {
   type VerifyResult,
   type Whoami,
 } from '@adonis-agora/crypto-core';
+export { configure } from '../configure.js';
 export { type AeadContext, CIPHERTEXT_PREFIX, readCiphertext } from './crypto/ciphertext.js';
 export {
   type CryptoKey,

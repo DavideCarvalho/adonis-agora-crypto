@@ -77,6 +77,41 @@ describe('stubs', () => {
     expect(await indexes()).not.toEqual(expect.arrayContaining([INDEXES[0]]));
   });
 
+  it('the tables migration runs after the provider already created the tables at boot', async () => {
+    const { application, dir } = await app();
+    const database = new Database(
+      {
+        connection: 'sqlite',
+        connections: {
+          sqlite: {
+            client: 'better-sqlite3',
+            connection: { filename: join(dir, 'db.sqlite') },
+            useNullAsDefault: true,
+          },
+        },
+      },
+      new LoggerFactory().create(),
+      new Emitter(application),
+    );
+    cleanups.unshift(() => database.manager.closeAll());
+    const connection = database.connection();
+    // `node ace migration:run` boots the provider, which creates the tables (autoCreateSchema).
+    await new LucidStore(connection as unknown as SqlDatabase).setup();
+    const Migration = await indexMigration(
+      application,
+      'database/migrations/create_crypto_tables.stub',
+    );
+    await new Migration(connection, 'tables', false).execUp();
+    const tables = (
+      (await connection.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'crypto_%'",
+      )) as Array<{ name: string }>
+    ).map((row) => row.name);
+    expect(tables).toEqual(
+      expect.arrayContaining(['crypto_keys', 'crypto_key_versions', 'crypto_audit']),
+    );
+  });
+
   const url = process.env.CRYPTO_TEST_PG_URL;
   it.skipIf(!url)('builds the indexes CONCURRENTLY on Postgres, idempotently', async () => {
     const { application } = await app();
@@ -119,14 +154,14 @@ const INDEXES = [
 ];
 
 /** Renders the published migration next to this spec (so its imports resolve) and loads it. */
-async function indexMigration(application: Awaited<ReturnType<typeof app>>['application']) {
-  const stub = await (await application.stubs.create()).build(
-    'database/migrations/add_crypto_audit_filter_indexes.stub',
-    { source: stubsRoot() },
-  );
+async function indexMigration(
+  application: Awaited<ReturnType<typeof app>>['application'],
+  file = 'database/migrations/add_crypto_audit_filter_indexes.stub',
+) {
+  const stub = await (await application.stubs.create()).build(file, { source: stubsRoot() });
   const { contents } = await stub.prepare({});
-  const file = join(import.meta.dirname, `.tmp_audit_indexes_${process.pid}_${Date.now()}.ts`);
-  writeFileSync(file, contents);
-  cleanups.push(() => rmSync(file, { force: true }));
-  return (await import(pathToFileURL(file).href)).default;
+  const target = join(import.meta.dirname, `.tmp_migration_${process.pid}_${Date.now()}.ts`);
+  writeFileSync(target, contents);
+  cleanups.push(() => rmSync(target, { force: true }));
+  return (await import(pathToFileURL(target).href)).default;
 }
