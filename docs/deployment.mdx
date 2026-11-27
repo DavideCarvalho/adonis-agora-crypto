@@ -15,6 +15,18 @@ the tenant side, exactly like `@adonis-agora/flags` and `@adonis-agora/durable`.
 topology: 'standalone' | 'control-plane' | 'tenant'
 ```
 
+## Three ways to run it
+
+- **Standalone** (the default, `defineConfig({ app: 'streaming' })`): the app keeps its own keys,
+  store, audit and console. Nothing else is involved.
+- **Federated console**: each app stays standalone and its key material never leaves it; one
+  console reaches every app over authenticated commands and shows them side by side. See
+  [Federated console](/docs/crypto/federated-console).
+- **Hub**: one crypto server runs `topology: 'control-plane'` and each app runs
+  `topology: 'tenant'`. With authkit-client's `service` configured that line is the whole tenant
+  config. This page covers it; the [Agora Hub guide](https://davidecarvalho.github.io/agora/docs/agora-hub)
+  shows the Hub with every lib together.
+
 ## The control plane
 
 ```ts title="config/crypto.ts (crypto server)"
