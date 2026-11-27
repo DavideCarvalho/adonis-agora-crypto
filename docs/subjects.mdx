@@ -23,8 +23,7 @@ It works the same in every topology: standalone (local development, tests), cont
 import { defineConfig } from '@adonis-agora/crypto'
 
 export default defineConfig({
-  topology: 'tenant',
-  tenant: { url: env.get('CRYPTO_URL'), partition: 'research', token: env.get('CRYPTO_TOKEN') },
+  topology: 'tenant', // url, token and partition from authkit-client's `service` (or `tenant: { … }`)
   subjects: {
     createKeys: 'explicit',                      // see "Token scope"
     cache: { maxEntries: 1000, ttlMs: 300_000 }, // the defaults

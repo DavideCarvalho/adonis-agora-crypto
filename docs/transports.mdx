@@ -17,9 +17,7 @@ import { defineConfig, transports } from '@adonis-agora/crypto'
 export default defineConfig({
   topology: 'tenant',
   tenant: {
-    url: env.get('CRYPTO_URL'),
-    partition: 'streaming',
-    token,
+    // url, token and partition: from authkit-client's `service`, or set them here
     // default: transports.http({ url })
     transport: transports.redis({ connection: redis.connection('main') }),
   },
@@ -87,9 +85,7 @@ import { defineConfig, transports } from '@adonis-agora/crypto'
 export default defineConfig({
   topology: 'tenant',
   tenant: {
-    url: env.get('CRYPTO_URL'),
-    partition: 'streaming',
-    token,
+    // url, token and partition: from authkit-client's `service`, or set them here
     transport: transports.durable({
       gateway: () => runGateway,
       timeoutMs: 15_000,

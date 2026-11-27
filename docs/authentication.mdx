@@ -35,7 +35,18 @@ export default defineConfig({
 })
 ```
 
+With `@adonis-agora/authkit-client` configured in the app (its `service: { name, clientId,
+clientSecret }`, a service-tenant client), the app needs no token setup: authkit-client fetches a
+client-credentials token for `urn:agora:crypto` (and finds the server URL and the partition). See
+[Deployment](/docs/crypto/deployment#a-tenant).
+
 ```ts title="config/crypto.ts (an app)"
+export default defineConfig({ topology: 'tenant' })
+```
+
+Without authkit-client's `service`, build the token yourself:
+
+```ts title="config/crypto.ts (an app, explicit)"
 import { authkitTenantToken } from '@adonis-agora/authkit-client'
 
 export default defineConfig({
