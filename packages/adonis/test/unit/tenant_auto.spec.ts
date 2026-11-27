@@ -164,7 +164,7 @@ describe('tenant topology with authkit-client', () => {
 
   it('refuses to boot a web process without the binding, naming the fields and both fixes', async () => {
     await expect(boot(undefined, { environment: 'web' })).rejects.toThrow(
-      "[@adonis-agora/crypto] topology 'tenant' needs tenant.url, tenant.token, tenant.partition. Configure @adonis-agora/authkit-client's `service` (config/authkit.ts: service: { name, clientId, clientSecret }) so they are discovered from the issuer, or pass tenant: { url, token, partition } in config/crypto.ts.",
+      "[@adonis-agora/crypto] topology 'tenant' needs tenant.url, tenant.token, tenant.partition. Configure @adonis-agora/authkit-client's `service` (config/authkit_client.ts: service: { name, clientId, clientSecret }) so they are discovered from the issuer, or pass tenant: { url, token, partition } in config/crypto.ts.",
     );
     await expect(boot({ partition: 'shop' }, { environment: 'web' })).rejects.toThrow(
       /needs tenant\.url, tenant\.token\. /,
@@ -190,7 +190,7 @@ describe('tenant topology with authkit-client', () => {
   it('surfaces why tenantOf could not answer (no `service`)', async () => {
     const authkit = {
       tenantOf() {
-        throw new Error('tenantOf needs `service` in config/authkit.ts');
+        throw new Error('tenantOf needs `service` in config/authkit_client.ts');
       },
     };
     await expect(boot(undefined, { environment: 'web', authkit })).rejects.toThrow(

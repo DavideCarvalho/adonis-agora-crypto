@@ -1,0 +1,14 @@
+{{{
+  exports({ to: app.configPath('crypto.ts') })
+}}}
+import { defineConfig } from '@adonis-agora/crypto'
+
+/**
+ * Every crypto operation goes to the Agora crypto server (the Hub).
+ *
+ * url, token and partition come from @adonis-agora/authkit-client (\`service\` in
+ * config/authkit_client.ts). To set them yourself (each field you set wins):
+ *
+ *   tenant: { url: env.get('CRYPTO_URL'), token: env.get('CRYPTO_TOKEN'), partition: env.get('CRYPTO_APP') },
+ */
+export default defineConfig({ topology: 'tenant' })

@@ -120,7 +120,7 @@ export async function resolveTenantFields(
 export function tenantMissingMessage(resolved: Pick<ResolvedTenantFields, 'missing' | 'cause'>) {
   const fields = resolved.missing.map((field) => `tenant.${field}`).join(', ');
   const cause = resolved.cause ? ` (authkit-client: ${resolved.cause})` : '';
-  return `[${PACKAGE}] topology 'tenant' needs ${fields}${cause}. Configure @adonis-agora/authkit-client's \`service\` (config/authkit.ts: service: { name, clientId, clientSecret }) so they are discovered from the issuer, or pass tenant: { url, token, partition } in config/crypto.ts.`;
+  return `[${PACKAGE}] topology 'tenant' needs ${fields}${cause}. Configure @adonis-agora/authkit-client's \`service\` (config/authkit_client.ts: service: { name, clientId, clientSecret }) so they are discovered from the issuer, or pass tenant: { url, token, partition } in config/crypto.ts.`;
 }
 
 /** `tenant url: authkit-client (auto), token: authkit-client (auto), partition: explicit`. */
