@@ -18,6 +18,7 @@ command pre-filtered to this lib. Exit code `0` when nothing is an error, `1` ot
 | `crypto.keyring` | cheap | Is there a root that seals key material: an envelope KMS, `crypto.keys`, or the app encryption service (the default)? |
 | `crypto.database` | deep | Reads the store: how many keys, in how many apps, how many deleted. |
 | `crypto.key-material` | deep | Opens **every** key version with the configured root; reports a `retired` root as a warning and an unopenable version as an error. |
+| `crypto.tenant-config` | cheap | On a tenant: where `url`, `token` and `partition` came from (`authkit-client (auto)` or `explicit`); errors naming the missing ones. |
 | `crypto.tenant` | deep | On a tenant: is the server reachable and is the token accepted, with which capabilities? |
 | `crypto.console` | cheap | Is the console gated? Without `console.authorize` it warns outside production and errors in production, where it denies every request. |
 | `crypto.console-commands` | cheap | Federated console: which modes `consoleCommands` accepts, and how this console authenticates commands to each `federatedApps` entry. Errors when a side is unauthenticated. |

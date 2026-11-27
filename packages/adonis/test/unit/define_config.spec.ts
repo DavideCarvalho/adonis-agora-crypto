@@ -45,25 +45,18 @@ describe('defineConfig', () => {
     expect(config.topology).toBe('control-plane');
   });
 
-  it('validates a tenant: url, partition and token are required', () => {
+  it('validates a tenant: url, partition and token may come from authkit-client', () => {
+    // Missing fields are resolved (or named) at boot, where authkit-client can be asked.
+    expect(defineConfig({ topology: 'tenant' }).topology).toBe('tenant');
+    expect(defineConfig({ topology: 'tenant', tenant: { partition: 'shop' } }).topology).toBe(
+      'tenant',
+    );
     expect(() =>
       defineConfig({
         topology: 'tenant',
         tenant: { partition: 'shop', token: 'secret', url: '' },
       }),
-    ).toThrow(/url is required/);
-    expect(() =>
-      defineConfig({
-        topology: 'tenant',
-        tenant: { url: 'https://crypto.example.com/_crypto', token: 'secret' },
-      } as never),
-    ).toThrow(/partition is required/);
-    expect(() =>
-      defineConfig({
-        topology: 'tenant',
-        tenant: { url: 'https://crypto.example.com/_crypto', partition: 'shop' },
-      } as never),
-    ).toThrow(/token is required/);
+    ).toThrow(/absolute http\(s\) URL/);
     expect(() =>
       defineConfig({
         topology: 'tenant',

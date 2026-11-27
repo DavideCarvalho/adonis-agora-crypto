@@ -416,7 +416,7 @@ export function envelopeSkipPaths(config: CryptoConfig, tenantUrl?: string): str
     if (trimmed !== '' && trimmed.startsWith('/')) paths.add(trimmed);
   };
   if (config.topology === 'tenant') {
-    const url = typeof config.tenant.url === 'string' ? config.tenant.url : tenantUrl;
+    const url = typeof config.tenant?.url === 'string' ? config.tenant.url : tenantUrl;
     try {
       if (url !== undefined) add(new URL(url).pathname);
     } catch {
