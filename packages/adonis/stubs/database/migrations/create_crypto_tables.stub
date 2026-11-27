@@ -5,11 +5,13 @@ import { BaseSchema } from '@adonisjs/lucid/schema'
 
 /**
  * The three tables @adonis-agora/crypto owns. The provider creates them at boot by default
- * ('autoCreateSchema: true'); this migration is for teams that manage every table themselves.
+ * ('autoCreateSchema: true'), and 'node ace migration:run' boots it too, so this migration skips
+ * the tables that already exist. Teams that manage every table themselves set
+ * 'autoCreateSchema: false' and keep it.
  */
 export default class extends BaseSchema {
   async up() {
-    this.schema.createTable('crypto_keys', (table) => {
+    this.schema.createTableIfNotExists('crypto_keys', (table) => {
       table.string('app', 128).notNullable()
       table.string('name', 64).notNullable()
       table.string('type', 24).notNullable()
@@ -26,7 +28,7 @@ export default class extends BaseSchema {
       table.primary(['app', 'name'])
     })
 
-    this.schema.createTable('crypto_key_versions', (table) => {
+    this.schema.createTableIfNotExists('crypto_key_versions', (table) => {
       table.string('app', 128).notNullable()
       table.string('name', 64).notNullable()
       table.integer('version').notNullable()
@@ -38,7 +40,7 @@ export default class extends BaseSchema {
       table.primary(['app', 'name', 'version'])
     })
 
-    this.schema.createTable('crypto_audit', (table) => {
+    this.schema.createTableIfNotExists('crypto_audit', (table) => {
       table.string('id', 36).notNullable().primary()
       table.string('at', 32).notNullable()
       table.string('app', 128).notNullable()
